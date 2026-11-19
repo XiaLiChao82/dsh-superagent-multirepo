@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { Deployment } from '../deployment.ts'
+import { sameName } from './text.ts'
 
 const exec = promisify(execFile)
 const TIMEOUT_MS = 90_000
@@ -54,17 +55,28 @@ function membership(error: unknown): unknown {
 }
 /**
  * Executes gh, lark-cli, and git subprocesses with deployment account credentials, timeouts, and abort signals.
- * Restricts GitHub API calls to the configured repository and translates CLI failures into CliError instances for Sources, MasterAssessor, Outbox, and Settings.
+ * Acts on one repository: GitHub API calls are restricted to it, and failures become CliError instances for Sources, MasterAssessor, Outbox, and Settings.
  */
 export class Commands {
+  private readonly bound: string | undefined
   /**
    * @param resolved - returns the resolved deployment setup, or throws while setup is still pending.
    * @param environment - variables overriding `process.env` for every command (such as isolated git settings).
+   * @param repository - the configured repository this instance acts on; the deployment's default repository when omitted.
    */
-  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal) {}
+  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal, repository?: string) {
+    this.bound = repository
+  }
   get deployment(): Deployment { return this.resolved() }
-  get repository(): string { return this.deployment.repository }
-  withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
+  /** The repository of this instance's GitHub API paths. */
+  get repository(): string { return this.bound ?? this.deployment.repository }
+  withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal]), this.bound) : this }
+  /** Commands acting on another configured repository, matched case-insensitively and bound by its configured name. */
+  for(repository: string): Commands {
+    const configured = this.deployment.repositories.find(name => sameName(name, repository))
+    if (!configured) throw new Error(`${repository} is not one of the configured repositories`)
+    return new Commands(this.resolved, this.environment, this.signal, configured)
+  }
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
       const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,

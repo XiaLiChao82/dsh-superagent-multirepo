@@ -60,6 +60,28 @@ describe('account-isolated operations', () => {
   })
 })
 
+describe('repository binding', () => {
+  const commands = new Commands(() => ({ ...deployment, repositories: [REPOSITORY, 'acme/gizmos'] }), {}, new AbortController().signal)
+  const calls = async (bound: Commands) => {
+    const run = vi.spyOn(bound, 'run').mockResolvedValueOnce('{}').mockResolvedValueOnce('raw').mockResolvedValueOnce('[[]]')
+    await bound.api(z.unknown(), 'issues/8'); await bound.api('contents/README.md'); await bound.pages(z.unknown(), 'issues')
+    return run.mock.calls.map(([, args]) => args[1])
+  }
+  it('sends the API calls of a bound repository to it, by its configured name', async () => {
+    const gizmos = commands.for('ACME/Gizmos')
+    expect(gizmos.repository).toBe('acme/gizmos')
+    expect(await calls(gizmos)).toEqual(['repos/acme/gizmos/issues/8', 'repos/acme/gizmos/contents/README.md', 'repos/acme/gizmos/issues'])
+    expect(commands.repository).toBe(REPOSITORY)
+  })
+  it('refuses a repository that is not configured', () => {
+    expect(() => commands.for('TGR-Robotics/unknown')).toThrow('TGR-Robotics/unknown is not one of the configured repositories')
+  })
+  it('keeps the bound repository with another signal', async () => {
+    const signalled = commands.for('acme/gizmos').withSignal(new AbortController().signal)
+    expect(await calls(signalled)).toEqual(['repos/acme/gizmos/issues/8', 'repos/acme/gizmos/contents/README.md', 'repos/acme/gizmos/issues'])
+  })
+})
+
 it('reports Feishu failures with their code and without command arguments', () => {
   const membership = commandError({stderr:'[page 1] fetching...\n'+JSON.stringify({error:{code:232011,message:'operator is not in the chat'}})})
   expect(membership).toMatchObject({ message: 'operator is not in the chat (232011)', code: 232011 })

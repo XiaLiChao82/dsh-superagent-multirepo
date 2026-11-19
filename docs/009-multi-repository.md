@@ -18,7 +18,7 @@ The GitHub Source takes a list instead of one repository:
 - `repositories` — rows of `{ repository: "owner/name" }`, the only repository field in the panel.
 - `repository` — the legacy single-repository text field. It is still accepted on read and folded into `repositories` on the next save; code that reads a stored configuration uses one helper, `repositoriesOf()` in `deployment.ts`.
 - An empty list is the existing `repositoryUnset` setup problem.
-- `SETUP_FIELDS.github` becomes `['repositories', 'cli']`, so changing the list asks for the usual restart.
+- `SETUP_FIELDS.github` becomes `['repositories', 'repository', 'cli']` (the legacy field is kept there while it can still be stored), so changing the list asks for the usual restart.
 
 The list order is meaningful: the first repository is the **default repository**.
 

@@ -2,7 +2,8 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { UserError } from '../src/core/index.ts'
 import { Commands } from '../src/infra/commands.ts'
-import { Setup } from '../src/app/setup.ts'
+import { Setup, setupChanged } from '../src/app/setup.ts'
+import { SettingsSchema } from '../src/policy.ts'
 import { SettingsConflict } from '../src/app/settings.ts'
 import { startRuntime, type Host } from './fixtures/host.ts'
 
@@ -98,4 +99,14 @@ it('records nothing for a pause that changes nothing, refuses a sync while setup
   await expect(settings.sync('feishu')).rejects.toThrow(new UserError('nothingToSync', { source: 'feishu' }))
   vi.mocked(Setup.prototype.configured).mockRestore()
   expect(() => settings.block('source:x')).toThrow(new UserError('unknownBlock', { block: 'source:x' }))
+})
+
+it('counts a change of the configured repositories as a setup change, but not the same list stored another way', () => {
+  const github = (config: Record<string, unknown>) => SettingsSchema.parse({ sources: { github: { enabled: true, config: { cli: 'gh', ...config } } } })
+  const legacy = github({ repository: 'acme/widgets' })
+  // A stored configuration from before the rows existed, saved again with the empty rows default or with the legacy field folded into the rows.
+  expect(setupChanged(legacy, github({ repository: 'acme/widgets', repositories: [] }))).toBe(false)
+  expect(setupChanged(legacy, github({ repository: '', repositories: [{ repository: 'acme/widgets' }] }))).toBe(false)
+  expect(setupChanged(legacy, github({ repositories: [{ repository: 'acme/widgets' }, { repository: 'acme/gizmos' }] }))).toBe(true)
+  expect(setupChanged(legacy, github({ repository: 'acme/widgets', cli: 'other-gh' }))).toBe(true)
 })

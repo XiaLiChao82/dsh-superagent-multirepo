@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, executable, machineOf, repositoriesOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 
 const exec = promisify(execFile)
@@ -56,10 +56,48 @@ describe('configuration schema', () => {
   })
 })
 
+describe('configured repositories', () => {
+  it('reads the rows in order, ignoring the legacy field when a row names a repository', () => {
+    expect(repositoriesOf({ repositories: [{ repository: 'acme/gizmos' }, { repository: '' }, { repository: 'acme/widgets' }], repository: 'acme/legacy', cli: 'gh', pollSeconds: 60 }))
+      .toEqual(['acme/gizmos', 'acme/widgets'])
+  })
+  it('folds the legacy field when no row names a repository', () => {
+    expect(repositoriesOf({ repository: 'acme/legacy' })).toEqual(['acme/legacy'])
+    expect(repositoriesOf({ repositories: [{ repository: '' }, {}], repository: 'acme/legacy' })).toEqual(['acme/legacy'])
+  })
+  it('keeps the first of names that differ only by case', () => {
+    expect(repositoriesOf({ repositories: [{ repository: 'Acme/Widgets' }, { repository: 'acme/gizmos' }, { repository: 'ACME/widgets' }] })).toEqual(['Acme/Widgets', 'acme/gizmos'])
+  })
+  it('reads malformed configuration without throwing, keeping a legacy owner/name', () => {
+    for (const config of [undefined, null, 'acme/widgets', {}, { repository: 'not a name' }, { repositories: 'acme/widgets' }, { repositories: [{ repository: 'acme/widgets', extra: 1 }] }])
+      expect(repositoriesOf(config)).toEqual([])
+    expect(repositoriesOf({ repositories: [{ repository: 'no name' }], repository: ' acme/legacy ' })).toEqual(['acme/legacy'])
+  })
+})
+
 describe('setup', () => {
+  /** Fake gh CLI with push access to acme/widgets (also reached by its former name acme/gadgets) and the given access to acme/gizmos; other repositories are unreadable. */
+  const many = (gizmosPush: boolean): string => program(join(dir, 'bin', 'gh-many'), `case "$*" in
+  "api user") echo '{"login":"Agent-Bot","id":7}' ;;
+  "api repos/acme/widgets --jq "*|"api repos/acme/gadgets --jq "*) echo '{"name":"acme/widgets","push":true}' ;;
+  "api repos/ACME/Gizmos --jq "*) echo '{"name":"acme/gizmos","push":${gizmosPush}}' ;;
+  *) echo 'HTTP 404' >&2; exit 1 ;;
+esac`)
+  const rows = (...names: string[]) => names.map(repository => ({ repository }))
+  it('resolves every configured repository to its canonical name, in configured order, the first being the default', async () => {
+    const deployment = await resolveDeployment(machine(), { repositories: rows('ACME/Gizmos', 'acme/widgets', 'acme/gadgets'), cli: many(true) }, probe, path)
+    // acme/gadgets is a former name of acme/widgets, so it resolves to a repository already listed.
+    expect(deployment).toMatchObject({ repository: 'acme/gizmos', repositories: ['acme/gizmos', 'acme/widgets'] })
+  })
+  it('fails setup naming the configured repository the account cannot push to or read', async () => {
+    await expect(resolveDeployment(machine(), { repositories: rows('acme/widgets', 'ACME/Gizmos'), cli: many(false) }, probe, path))
+      .rejects.toEqual(setupError('github', 'repositoryReadOnly', { account: 'Agent-Bot', repository: 'acme/gizmos' }))
+    await expect(resolveDeployment(machine(), { repositories: rows('acme/widgets', 'acme/missing'), cli: many(true) }, probe, path))
+      .rejects.toEqual(setupError('github', 'repositoryUnreadable', { account: 'Agent-Bot', repository: 'acme/missing', output: expect.stringContaining('HTTP 404') }))
+  })
   it('reads the repository from the GitHub Source and the accounts from their CLIs, skipping the worker shims', async () => {
     const deployment = await resolveDeployment(machine(), { repository: 'acme/widgets', cli: 'gh' }, probe, path)
-    expect(deployment).toMatchObject({ repository: 'acme/widgets', github: { cli: join(dir, 'bin', 'gh'), login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' } })
+    expect(deployment).toMatchObject({ repository: 'acme/widgets', repositories: ['acme/widgets'], github: { cli: join(dir, 'bin', 'gh'), login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' } })
     expect(deployment.github).toEqual({ cli: join(dir, 'bin', 'gh'), login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' })
     expect(deployment).not.toHaveProperty('feishu')
     // A renamed repository is still resolved by its old name; notifications carry GitHub's current full_name.
