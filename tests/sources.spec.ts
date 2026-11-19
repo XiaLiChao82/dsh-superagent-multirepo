@@ -12,6 +12,7 @@ import { ciCounts, ciFact, ciSummary } from '../src/sources/github-read.ts'
 import { apply as applyGithub, githubKind, pollFailure, pollRound } from '../src/sources/github.ts'
 import { pollThreads as pollGithubThreads } from '../src/sources/github.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
+import type { FieldSpec } from '../src/sources/kind.ts'
 import { cursorAt, POLL_HORIZON_MS } from '../src/sources/poll.ts'
 import { Store } from '../src/app/store.ts'
 import { Commands, commandError } from '../src/infra/commands.ts'
@@ -1145,8 +1146,27 @@ it('reports GitHub as failing only after the configured number of consecutive fa
   expect(pollFailure(1, 3, eof)).toBeUndefined()
   expect(pollFailure(2, 3, eof)).toBeUndefined()
   expect(pollFailure(3, 3, eof)).toEqual({ state: 'error', detail: '3 consecutive failed polls; last: Error: Get "https://api.github.com/x": EOF', code: 'pollFailures', values: { count: '3', error: 'Error: Get "https://api.github.com/x": EOF' } })
-  expect(githubKind.schema.parse({})).toEqual({ repositories: [], repository: '', cli: '', pollSeconds: 60, failuresBeforeError: 3, observeIssues: false,
+  expect(githubKind.schema.parse({})).toEqual({ repositories: [], cli: '', pollSeconds: 60, failuresBeforeError: 3, observeIssues: false,
     observePulls: false, observeComments: false, observeCi: false })
+})
+it('saves a single-repository GitHub configuration as the repositories list, without the legacy key', () => {
+  const folded = githubKind.schema.parse({ repository: 'acme/widgets', cli: 'gh-agent' })
+  expect(folded).toMatchObject({ repositories: [{ repository: 'acme/widgets' }], cli: 'gh-agent' })
+  expect(folded).not.toHaveProperty('repository')
+  // A configured list keeps its order, the first being the default repository.
+  expect(githubKind.schema.parse({ repositories: [{ repository: 'acme/gadgets' }, { repository: 'acme/widgets' }] }).repositories)
+    .toEqual([{ repository: 'acme/gadgets' }, { repository: 'acme/widgets' }])
+})
+it('edits the GitHub repositories as one list of owner/name rows, with no single repository field', () => {
+  const field = githubKind.fields.find(item => item.key === 'repositories')
+  expect(field).toMatchObject({ type: 'rows', columns: [{ key: 'repository', type: 'text' }] })
+  const column = (field as Extract<FieldSpec, { type: 'rows' }>).columns[0] as { pattern?: string }
+  // A browser checks an input against its pattern as a whole, in the `v` mode.
+  const pattern = new RegExp(`^(?:${column.pattern})$`, 'v')
+  expect(['acme/widgets', 'Acme-1/my.repo_2'].filter(name => pattern.test(name))).toHaveLength(2)
+  expect(['acme', 'acme/widgets/extra', 'https://github.com/acme/widgets'].filter(name => pattern.test(name))).toEqual([])
+  expect(githubKind.fields.map(item => item.key).slice(0, 2)).toEqual(['cli', 'repositories'])
+  expect(githubKind.fields.some(item => item.key === 'repository')).toBe(false)
 })
 describe('feishu event consumer', () => {
   let dir: string

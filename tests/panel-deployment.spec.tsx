@@ -81,8 +81,12 @@ it('renders the Deployment page with the derived accounts in the Plugin Manager,
   await render('summary')
   expect(container.textContent).toBe('')
   server.form = fakeForm().form
+  server.setup = { ...server.setup, accounts: { ...server.setup.accounts!, repositories: ['acme/widgets', 'acme/gadgets'] } }
   await render('page')
-  for (const fact of ['acme/widgets', '@agent-bot', 'Widgets Bot', '账号在 dsh-superagent 面板的来源设置里修改。']) expect(text()).toContain(fact)
+  for (const fact of ['@agent-bot', 'Widgets Bot', '账号在 dsh-superagent 面板的来源设置里修改。']) expect(text()).toContain(fact)
+  // Every repository on its own line, in the configured order, the first marked as the default.
+  const row = all('.dt-kv > div').find(item => item.querySelector('dt')?.textContent === zh.deploymentRepositories)!
+  expect([...row.querySelectorAll('dd > div')].map(line => line.textContent)).toEqual(['acme/widgets（默认）', 'acme/gadgets'])
   server.setup = { ...server.setup, problem: problemOf('repositoryUnset'), accounts: null }
   await render('page')
   expect(text()).toContain('部署检查未通过：GitHub 来源没有设置监听的仓库。')

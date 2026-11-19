@@ -22,10 +22,17 @@ const NotificationSchema = z.looseObject({
   repository: z.looseObject({ full_name: z.string() }), subject: z.looseObject({ url: z.string().nullish() }),
 })
 
-const GithubConfigSchema = GithubAccountsSchema.extend({ pollSeconds: z.number().int().min(60).max(3600).default(60),
+/** The GitHub Source configuration as stored or submitted, the legacy `repository` field included. */
+const GithubConfigObject = GithubAccountsSchema.extend({ pollSeconds: z.number().int().min(60).max(3600).default(60),
   failuresBeforeError: z.number().int().min(1).max(20).default(3),
   observeIssues: z.boolean().default(false), observePulls: z.boolean().default(false), observeComments: z.boolean().default(false),
   observeCi: z.boolean().default(false) }).strict()
+/**
+ * The configuration with the legacy `repository` folded into `repositories` (docs/009-multi-repository.md), so a stored
+ * single-repository configuration is saved as a list on its next save.
+ */
+const GithubConfigSchema = GithubConfigObject.transform(({ repository: _legacy, ...config }) =>
+  ({ ...config, repositories: repositoriesOf({ ...config, repository: _legacy }).map(repository => ({ repository })) }))
 export type GithubConfig = z.infer<typeof GithubConfigSchema>
 const OBSERVED = { issues: 'observeIssues', pulls: 'observePulls', comments: 'observeComments', ci: 'observeCi' } as const
 type Scope = keyof typeof OBSERVED
@@ -41,10 +48,11 @@ export const githubKind: SourceKind<GithubConfig> = {
   description: { zh: '智能体的 GitHub 账号；接收仓库里发给它的通知、已订阅 Issue 与 PR 的讨论、CI 状态变化和 PR 合并关闭。', en: 'The agent\'s GitHub accounts; receives notifications to it in the repository, discussion on subscribed Issues and PRs, CI changes, and PR merge or close.' },
   schema: GithubConfigSchema,
   fields: [
-    { key: 'repository', type: 'text', pattern: '[A-Za-z0-9_.\\-]+/[A-Za-z0-9_.\\-]+', label: { zh: '监听的仓库', en: 'Repository' },
-      hint: { zh: '写作 owner/name。这个来源接收这个仓库的通知和讨论；保存时检查智能体账号能否推送到它，然后重启 dsh-superagent。', en: 'Written owner/name. This Source receives the repository\'s notifications and discussion; saving checks that the agent account can push to it, then restarts dsh-superagent.' } },
     { key: 'cli', type: 'text', label: { zh: '智能体的 GitHub CLI', en: 'Agent GitHub CLI' },
-      hint: { zh: '命令名或绝对路径，通常是用 GH_CONFIG_DIR 登录智能体账号的 gh 包装脚本。智能体以它登录的账号行事，执行器以 gh 调用它。保存时检查它登录的账号能否推送到仓库，然后重启 dsh-superagent。', en: 'A command name or absolute path, usually a gh wrapper signed in to the agent account through GH_CONFIG_DIR. The agent acts as the account it is signed in to, and the Executor calls it as gh. Saving checks that this account can push to the repository, then restarts dsh-superagent.' } },
+      hint: { zh: '命令名或绝对路径，通常是用 GH_CONFIG_DIR 登录智能体账号的 gh 包装脚本。智能体以它登录的账号行事，执行器以 gh 调用它。保存时检查它登录的账号能否推送到每个仓库，然后重启 dsh-superagent。', en: 'A command name or absolute path, usually a gh wrapper signed in to the agent account through GH_CONFIG_DIR. The agent acts as the account it is signed in to, and the Executor calls it as gh. Saving checks that this account can push to each repository, then restarts dsh-superagent.' } },
+    { key: 'repositories', type: 'rows', label: { zh: '监听的仓库', en: 'Repositories' },
+      hint: { zh: '每行一个仓库，写作 owner/name。这个来源接收列表里每个仓库的通知和讨论。列表有先后，第一个是默认仓库：没有写明仓库的消息用它。保存时检查智能体账号能否推送到每个仓库，然后重启 dsh-superagent。', en: 'One repository per row, written owner/name. This Source receives the notifications and discussion of every repository on the list. The list is ordered: the first is the default repository, used by messages that name none. Saving checks that the agent account can push to each repository, then restarts dsh-superagent.' },
+      columns: [{ key: 'repository', type: 'text', pattern: '[A-Za-z0-9_.\\-]+/[A-Za-z0-9_.\\-]+', label: { zh: '仓库', en: 'Repository' } }] },
     { key: 'pollSeconds', type: 'number', advanced: true, min: 60, max: 3600, label: { zh: '轮询间隔 / 秒', en: 'Polling interval / seconds' }, hint: { zh: 'GitHub 要求更长间隔时以 GitHub 为准。', en: 'A longer interval requested by GitHub wins.' } },
     { key: 'failuresBeforeError', type: 'number', advanced: true, min: 1, max: 20, label: { zh: '连续失败几次后报告异常', en: 'Failed polls before reporting an error' }, hint: { zh: '单次网络中断会在下一次轮询时自动重试，不必报告。', en: 'A single network interruption is retried on the next poll and need not be reported.' } },
     { key: 'observeIssues', type: 'switch', label: { zh: '接收仓库里的新 Issue', en: 'Receive new Issues in the repository' },
@@ -82,7 +90,7 @@ export const githubKind: SourceKind<GithubConfig> = {
       columns: [{ key: 'id', type: 'text', label: { zh: '账号', en: 'Account' }, pattern: '[A-Za-z0-9\\-]+(\\[bot\\])?' }] }],
     explicit: { zh: '名单里的账号在 Issue 或评论里 @ 智能体的账号。', en: 'An account on the list mentions the agent\'s account in an Issue or a comment.' },
     rows(stored) {
-      const config = GithubConfigSchema.partial().parse(stored)
+      const config = GithubConfigObject.partial().parse(stored)
       const note = (observed: boolean | undefined) => observed ? { zh: '全部', en: 'All' } : { zh: '仅 @', en: '@ only' }
       const row = (id: Scope, label: { zh: string; en: string }) => ({ id, label, note: note(config[OBSERVED[id]]),
         cells: { listedUnaddressed: !!config[OBSERVED[id]], unlistedAddressed: true, unlistedUnaddressed: !!config[OBSERVED[id]] } })

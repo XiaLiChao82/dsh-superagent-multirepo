@@ -881,6 +881,14 @@ it('reports a failure to write the agent environment as environmentFailed and le
   expect(process.env).toEqual(environment)
 })
 
+it('gives the panel every configured repository in order, and the first as the default, once setup passes', async () => {
+  answers[`${AGENT()} api repos/acme/gadgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/gadgets","push":true}\n'
+  const next = await restart({}, { github: { repositories: [{ repository: 'acme/gadgets' }, { repository: 'acme/widgets' }] } })
+  await next.ready
+  expect((await api('GET', 'state')).body).toMatchObject({ setup: { problem: null,
+    accounts: { repository: 'acme/gadgets', repositories: ['acme/gadgets', 'acme/widgets'], agent: 'agent-bot' } } })
+})
+
 it('checks only the account a Source save changes, so a problem setup has elsewhere does not refuse it', async () => {
   answers = { ...answers, [`${BOT()} config strict-mode`]: 'strict-mode: off (source: profile)' }
   const next = await restart()

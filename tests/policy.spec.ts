@@ -25,7 +25,7 @@ const { sources, policy } = setup()
 const thread = (subscriptions: string[] = []): Thread => ({ key: 'feishu:x', ref: { source: 'feishu', id: 'x' }, createdAt: '', subscriptions, correlated: [], pending: [], meta: {} })
 const feishu = (overrides: Partial<Trigger> & { meta?: Record<string, unknown> } = {}): Trigger => ({ id: 't', source: 'feishu', threads: [{ source: 'feishu', id: 'x' }], actor: { source: 'feishu', id: MEMBER }, human: true, at: '', text: 'hi', addressed: 'mention', meta: { chatId: CHAT, direct: false, mentioned: true }, ...overrides })
 const unaddressed = (overrides: Partial<Trigger> = {}): Trigger => { const { addressed: _addressed, ...rest } = feishu(overrides); return rest }
-const github = (login: string, addressed?: 'mention'): Trigger => ({ id: 'g', source: 'github', threads: [{ source: 'github', id: '1' }], actor: { source: 'github', id: login }, human: true, at: '', text: 'x', ...addressed ? { addressed } : {}, meta: { number: 1, isPr: true } })
+const github = (login: string, addressed?: 'mention'): Trigger => ({ id: 'g', source: 'github', threads: [{ source: 'github', id: 'acme/widgets#1' }], actor: { source: 'github', id: login }, human: true, at: '', text: 'x', ...addressed ? { addressed } : {}, meta: { number: 1, isPr: true } })
 const ticket = { id: 'ticket', ended: { at: '', by: 'executor', reason: 'closed', outcome: 'closed' } } as Ticket
 
 describe('source scope', () => {
@@ -412,7 +412,7 @@ describe('bots and events without a sender', () => {
     mode: 'auto' | 'off' = 'auto') => SettingsSchema.parse({
     policy: { sources: { github: { allowed: [{ id: 'Alice' }], bots: [{ id: 'dependabot[bot]' }], ...part } } }, eval: { mode },
     sources: { github: { enabled: true, config } } })
-  const comment: Trigger = { id: 'b', source: 'github', threads: [{ source: 'github', id: '1' }],
+  const comment: Trigger = { id: 'b', source: 'github', threads: [{ source: 'github', id: 'acme/widgets#1' }],
     actor: { source: 'github', id: 'dependabot[bot]' }, human: false, at: '', text: 'Bump lodash',
     meta: { number: 1, isPr: true, kind: 'conversation' } }
   const ci = (meta: Record<string, unknown>): Trigger => ({ id: 'ci', source: 'github', threads: [{ source: 'github', id: 'ci:main' }],

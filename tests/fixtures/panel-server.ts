@@ -113,7 +113,7 @@ export let server: PanelServer
 
 function resolved() {
   const accounts = server.setup.accounts
-  return accounts ? testDeployment({ repository: accounts.repository, github: { cli: '/bin/false', login: accounts.agent, noreply: '' },
+  return accounts ? testDeployment({ repository: accounts.repository, repositories: accounts.repositories, github: { cli: '/bin/false', login: accounts.agent, noreply: '' },
     ...accounts.feishu ? { feishu: { cli: '/bin/false', ...accounts.feishu } } : { feishu: undefined } }) : undefined
 }
 /** Default source health: paused during setup; Feishu defaults to `socket closed` unless overridden or paused by setup. */
@@ -238,7 +238,7 @@ function initial(): PanelServer {
       rules: [{ id: 'copy', name: '文案修改', enabled: true, instruction: '修正明确的文案错误' }] },
     sources: { feishu: { enabled: true, config: { cli: 'lark-bot', chats: [{ chatId: 'oc_team', listen: 'mentions' }],
       directMessages: true } },
-      github: { enabled: true, config: { repository: 'acme/widgets', cli: 'gh-agent' } } },
+      github: { enabled: true, config: { repositories: [{ repository: 'acme/widgets' }], cli: 'gh-agent' } } },
     executor: { blockedCommands: ['gh-personal'] },
   })
   const ended = ticketSummary({ id: 't0', title: '旧工单', state: 'ended', actions: { retry: false, stop: false },
@@ -249,7 +249,7 @@ function initial(): PanelServer {
   return {
     health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), dropped: [], failing: [],
     setup: { machine: MACHINE, problem: null, feishuProblem: null,
-      accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
+      accounts: { repository: 'acme/widgets', repositories: ['acme/widgets'], agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
         name: 'Widgets Bot' } } },
     settings, revisions: { policy: 3, eval: 1, executor: 0 },
     prompts: { masterId: 'master', sections: TEAM_SECTIONS, skillName: SKILL_NAME.source, builtin: ['feishu', 'github'],

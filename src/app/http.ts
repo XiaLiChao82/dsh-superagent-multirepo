@@ -94,11 +94,12 @@ function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admis
   return { stateDir, promptMaxChars: promptMaxChars.get(), admissionContextMaxPages: admissionContextMaxPages.get(),
     admissionContextTimeoutMs: admissionContextTimeoutMs.get() }
 }
+/** Setup state for the panel; `accounts.repositories` is the configured list (the first is the default), `repository` stays for older readers. */
 function setupView(runtime: HttpHost) {
   const resolved = runtime.configured() ? runtime.deployment : undefined
   return {
     machine: machineView(runtime.machine), problem: runtime.setupProblem ?? null, feishuProblem: runtime.feishuProblem ?? null,
-    accounts: resolved ? { repository: resolved.repository, agent: resolved.github.login, feishu: resolved.feishu ? { appId: resolved.feishu.appId, brand: resolved.feishu.brand, botId: resolved.feishu.botId, name: resolved.feishu.name } : null } : null,
+    accounts: resolved ? { repository: resolved.repository, repositories: resolved.repositories, agent: resolved.github.login, feishu: resolved.feishu ? { appId: resolved.feishu.appId, brand: resolved.feishu.brand, botId: resolved.feishu.botId, name: resolved.feishu.name } : null } : null,
   }
 }
 /** Build the `/orchestrator/api/state` response consumed by the management panel and `scripts/dsh-superagent status` (`docs/006-deployment.md`). */

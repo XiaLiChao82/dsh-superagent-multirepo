@@ -542,9 +542,10 @@ const TEXT = {
   // Deployment
   deploymentIntro: ['这台机器上的 dsh-superagent 设置，存放在 DSH 配置文件的 dsh-superagent 条目里；保存后立即生效，不会重启 dsh-superagent。', 'dsh-superagent\'s settings on this machine, kept in the dsh-superagent entry of the DSH configuration; a saved change applies at once, without restarting dsh-superagent.'],
   deploymentUnavailable: ['dsh-superagent 启动完成后才能修改这些值。', 'These values can be changed once dsh-superagent has started.'],
-  deploymentDerived: ['仓库与账号', 'Repository and accounts'],
-  deploymentDerivedHint: ['由来源设置里的仓库和 CLI 得出。', 'Derived from the repository and the CLIs in the Source settings.'],
-  deploymentRepository: ['仓库', 'Repository'],
+  deploymentDerived: ['仓库与账号', 'Repositories and accounts'],
+  deploymentDerivedHint: ['由来源设置里的仓库和 CLI 得出。', 'Derived from the repositories and the CLIs in the Source settings.'],
+  deploymentRepositories: ['监听的仓库', 'Repositories'],
+  deploymentDefaultRepository: ['{name}（默认）', '{name} (default)'],
   deploymentAgent: ['智能体账号', 'Agent account'],
   deploymentFeishu: ['飞书机器人', 'Feishu bot'],
   deploymentFeishuNone: ['未设置', 'Not set'],

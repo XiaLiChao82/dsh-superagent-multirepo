@@ -53,6 +53,9 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
     <Input type="number" min={LIMITS[key].min} max={LIMITS[key].max} step={1} value={draft.value[key]} disabled={!editable}
       onChange={event => draft.edit({ ...draft.value, [key]: event.target.value })} />
   </Field>
+  // One repository per line, in the configured order; the first is the default one.
+  const repositories = accounts?.repositories.length ? accounts.repositories.map((name, index) => <div key={name}>{index ? name
+    : t('deploymentDefaultRepository', { name })}</div>) : '—'
   const feishu = accounts?.feishu ? accounts.feishu.name || accounts.feishu.botId
     : setup.feishuProblem ? setupText(t, setup.feishuProblem) : t('deploymentFeishuNone')
   return <form className="dt-form" onSubmit={event => { void draft.submit(event) }}>
@@ -62,7 +65,7 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
         <p className="dt-error" role="status"><SetupMessage problem={setup.problem} lead /></p><CheckSetupButton />
       </div>}
       {showAccounts && <Section title={t('deploymentDerived')} hint={t('deploymentDerivedHint')}>
-        <KeyValues rows={[[t('deploymentRepository'), accounts?.repository ?? '—'],
+        <KeyValues rows={[[t('deploymentRepositories'), repositories],
           [t('deploymentAgent'), accounts ? `@${accounts.agent}` : '—'], [t('deploymentFeishu'), feishu]]} />
         <Hint>{t('deploymentAccountsWhere')}</Hint>
       </Section>}

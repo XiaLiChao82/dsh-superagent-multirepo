@@ -43,7 +43,7 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
       name: 'orchestrator_thread_unrelated',
       description: 'Stop following an attached thread that is not about this ticket, as the work section says; its own threads cannot be dropped.',
       schema: z.object({
-        thread: z.string().min(1).describe('The thread key, which trigger/<id> of one of its messages shows as thread, such as feishu:<chat>:<root> or github:<number>.'),
+        thread: z.string().min(1).describe('The thread key, which trigger/<id> of one of its messages shows as thread, such as feishu:<chat>:<root> or github:<owner>/<name>#<number>.'),
         reason: z.string().trim().min(1).max(300).describe('One sentence on why the thread is not about this ticket.'),
       }).strict(),
       execute: async args => { host.engine.markUnrelated(ticketId, args.thread, args.reason); return { removed: true, thread: args.thread } },
@@ -52,12 +52,12 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
       name: 'orchestrator_thread_follow',
       description: 'Follow a related thread, such as an Issue or another PR, for context only.',
       schema: z.object({
-        thread: z.string().describe('Thread key, such as github:<number>.'),
+        thread: z.string().describe('Thread key, such as github:<owner>/<name>#<number>.'),
         reason: z.string().trim().min(1).max(300).describe('How it relates, in one sentence.'),
       }).strict(),
       execute: async args => host.store.atomic(() => {
         const at = args.thread.indexOf(':')
-        if (at < 1 || at === args.thread.length - 1) throw new Error('A thread key is <source>:<id>, such as github:<number>')
+        if (at < 1 || at === args.thread.length - 1) throw new Error('A thread key is <source>:<id>, such as github:<owner>/<name>#<number>')
         const followed = host.engine.followForContext(ticketId, { source: args.thread.slice(0, at), id: args.thread.slice(at + 1) })
         if (followed) host.sessions.notify(...threadFollowedNotice(ticketId, args.thread, args.reason))
         return { followed, thread: args.thread }
