@@ -1,12 +1,15 @@
 /**
- * Migrates a schema 10 database to schema 11 in a single transaction so runtime readers never convert legacy shapes.
- * Databases older than schema 10 are rejected: this version cannot migrate them.
+ * Migrates a schema 10 or 11 database to schema 12 in a single transaction so runtime readers never convert legacy shapes:
+ * schema 10 to 11 first (`migrateTo11`), then 11 to 12 (`migrateTo12`). Databases older than schema 10 are rejected: this
+ * version cannot migrate them.
  */
 import { basename } from 'node:path'
 import { z } from 'zod'
 import { isoTime, said, type AcceptMode, type AdmissionCell, type ChannelRef, type Decision, type Execution, type Follow, type MandateBasis,
-  type Reason, type Thread, type Ticket, type TicketInput, type TriggerDisposition } from '../core/index.ts'
+  type Reason, type Thread, type Ticket, type TicketInput, type Trigger, type TriggerDisposition } from '../core/index.ts'
+import { repositoriesOf } from '../deployment.ts'
 import { feishuChatLink } from '../sources/feishu-channel.ts'
+import { SOURCE as GITHUB, branchCiThreadId, githubThreadId } from '../sources/github-trigger.ts'
 import { POLL_HORIZON_MS } from '../sources/poll.ts'
 import { SettingsSchema, policyVersion, type SettingsOrigin } from '../policy.ts'
 import { autoMergeThreshold, teamDefaults } from './context.ts'
@@ -17,7 +20,7 @@ import type { SettingsVersion, Store } from './store.ts'
 import { Versions } from './versions.ts'
 import { KV, type Key } from '../kv.ts'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 /** The oldest database schema version this build can open and migrate directly. */
 export const OLDEST_SCHEMA = 10
 /** Returns an error message explaining why `version` cannot be opened: older schemas need a new state directory. */
@@ -613,4 +616,123 @@ function assessmentTriggers(store: Store): void {
     store.db.prepare(`INSERT INTO effect (kind, key, value, seq, due, since) VALUES ('assessment', ?, ?, ?, ?, ?) ON CONFLICT(kind, key) DO NOTHING`)
       .run(evaluation.id, JSON.stringify({ triggerId: evaluation.triggerIds[0] }), ++seq, Date.now(), new Date().toISOString())
   }
+}
+
+/*
+ * Schema 12: a schema 11 database was single-repository, so its GitHub Thread IDs (`<number>`, `ci:<branch>`), Thread
+ * labels, and KV cursors did not name a repository. `migrateTo12` qualifies every one of them with the repository the
+ * stored GitHub Source configuration names, leaving already-qualified records and other Sources' records as they are.
+ */
+
+/** Rewrite all schema 11 GitHub Thread references and cursors into their repository-qualified schema 12 shapes in place. */
+export function migrateTo12(store: Store): void {
+  const repository = step('the settings', () => configuredRepository(store))
+  // With no configured repository there is nothing to qualify the stored references with.
+  if (!repository) return
+  qualifyThreads(store, repository)
+  for (const row of store.db.prepare('SELECT id, value FROM trigger').all()) {
+    step(`trigger ${String(row.id)}`, () => { qualifyTrigger(store, JSON.parse(String(row.value)) as Trigger, repository) })
+  }
+  for (const row of store.db.prepare('SELECT id, value FROM ticket').all()) {
+    step(`ticket ${String(row.id)}`, () => {
+      const ticket = JSON.parse(String(row.value)) as Ticket
+      const next = { ...ticket, channels: ticket.channels.map(channel => qualifiedChannel(channel, repository)),
+        ...ticket.follows ? { follows: ticket.follows.map(follow => ({ ...follow, thread: qualifiedKey(follow.thread, repository) })) } : {} }
+      if (JSON.stringify(next) !== JSON.stringify(ticket)) store.tickets.save(next)
+    })
+  }
+  for (const row of store.db.prepare(`SELECT id, value FROM decision WHERE thread LIKE '${GITHUB}:%'`).all()) {
+    step(`decision ${String(row.id)}`, () => {
+      const decision = JSON.parse(String(row.value)) as Decision
+      const threadKey = qualifiedKey(decision.threadKey, repository)
+      if (threadKey !== decision.threadKey) store.decisions.save({ ...decision, threadKey })
+    })
+  }
+  for (const row of store.db.prepare(`SELECT id, value FROM outbox WHERE value ->> '$.channel.source' = '${GITHUB}'`).all()) {
+    step(`message ${String(row.id)}`, () => {
+      const message = JSON.parse(String(row.value)) as Stored & { channel: ChannelRef }
+      const channel = qualifiedChannel(message.channel, repository)
+      if (channel !== message.channel) store.db.prepare('UPDATE outbox SET value = ? WHERE id = ?').run(JSON.stringify({ ...message, channel }), String(row.id))
+    })
+  }
+  step('the GitHub Source\'s records', () => { qualifyGithubState(store, repository) })
+}
+/**
+ * The repository a schema 11 database's GitHub records belong to: the first one the current settings revision's GitHub
+ * Source configuration names (its `repositories` rows, else the legacy `repository` field), or undefined when none does.
+ */
+function configuredRepository(store: Store): string | undefined {
+  const versions = new Versions<SettingsVersion>(store, KV.settings.revision, KV.settings.version)
+  const settings: unknown = (versions.current() ?? versions.list(1)[0])?.settings
+  const sources = isObject(settings) ? settings.sources : undefined
+  const github = isObject(sources) ? sources[GITHUB] : undefined
+  return repositoriesOf(isObject(github) ? github.config : undefined)[0]
+}
+/** A schema 11 GitHub Thread ID qualified with `repository`: `<number>` and `ci:<branch>`; any other ID is returned unchanged. */
+function qualifiedId(id: string, repository: string): string {
+  if (/^[1-9]\d*$/.test(id)) return githubThreadId(repository, Number(id))
+  // A Git branch name cannot hold `:`, so a `ci:` ID with a second `:` already names its repository.
+  const branch = id.startsWith('ci:') ? id.slice('ci:'.length) : ''
+  return branch && !branch.includes(':') ? branchCiThreadId(repository, branch) : id
+}
+/** A GitHub Thread key (`github:<id>`) with its ID qualified by `qualifiedId`; other Sources' keys are returned unchanged. */
+const qualifiedKey = (key: string, repository: string): string =>
+  key.startsWith(`${GITHUB}:`) ? `${GITHUB}:${qualifiedId(key.slice(GITHUB.length + 1), repository)}` : key
+/** A GitHub Channel on a schema 11 Thread, with its Thread key qualified and its address naming `repository`; any other Channel is returned as is. */
+function qualifiedChannel(channel: ChannelRef, repository: string): ChannelRef {
+  const thread = channel.source === GITHUB ? qualifiedKey(channel.thread, repository) : channel.thread
+  return thread === channel.thread ? channel : { ...channel, thread, address: { repository, ...channel.address } }
+}
+/** A schema 11 GitHub Thread label (`#<number> <title>`, `CI on <branch>`) in the shape the Source writes now; any other label is returned unchanged. */
+const qualifiedLabel = (label: unknown, repository: string): unknown => typeof label !== 'string' ? label
+  : label.replace(/^#(?=[1-9]\d*(?: |$))/, () => `${repository}#`).replace(/^CI on /, () => `${repository} CI on `)
+/**
+ * Qualify GitHub Threads stored under schema 11 IDs (key, `ref.id`, `meta.repository`, label, and the Eval in progress), and
+ * the GitHub keys every Thread lists as `correlated`. A Thread keeps its row, so the order Threads were stored in stays.
+ */
+function qualifyThreads(store: Store, repository: string): void {
+  for (const thread of store.threads.list()) {
+    const id = thread.ref.source === GITHUB ? qualifiedId(thread.ref.id, repository) : thread.ref.id
+    const legacy = id !== thread.ref.id
+    const key = legacy ? `${GITHUB}:${id}` : thread.key
+    const correlated = thread.correlated.map(other => qualifiedKey(other, repository))
+    const evaluating = thread.evaluating && { ...thread.evaluating, threadKey: qualifiedKey(thread.evaluating.threadKey, repository) }
+    const meta = legacy ? { ...thread.meta, ...typeof thread.meta.repository === 'string' ? {} : { repository },
+      ...'label' in thread.meta ? { label: qualifiedLabel(thread.meta.label, repository) } : {} } : thread.meta
+    const next: Thread = { ...thread, key, ref: { ...thread.ref, id }, correlated, ...evaluating ? { evaluating } : {}, meta }
+    if (JSON.stringify(next) === JSON.stringify(thread)) continue
+    step(`thread ${thread.key}`, () => { store.db.prepare('UPDATE thread SET key = ?, value = ? WHERE key = ?').run(key, JSON.stringify(next), thread.key) })
+  }
+}
+/** Qualify a Trigger's GitHub Threads, its GitHub Channel, and, for a GitHub Trigger on a schema 11 Thread, its `meta.repository`; saving re-indexes its Threads. */
+function qualifyTrigger(store: Store, trigger: Trigger, repository: string): void {
+  const threads = trigger.threads.map(ref => ref.source === GITHUB ? { ...ref, id: qualifiedId(ref.id, repository) } : ref)
+  const legacy = trigger.source === GITHUB && threads.some((ref, index) => ref.id !== trigger.threads[index]!.id)
+  const meta = legacy && typeof trigger.meta.repository !== 'string' ? { ...trigger.meta, repository } : trigger.meta
+  const next: Trigger = { ...trigger, threads, ...trigger.channel ? { channel: qualifiedChannel(trigger.channel, repository) } : {}, meta }
+  if (JSON.stringify(next) !== JSON.stringify(trigger)) store.triggers.save(next)
+}
+/**
+ * Move the GitHub Source's schema 11 KV records under their schema 12 keys: per-Thread cursors and CI fingerprints, retry
+ * map keys, repository stream cursors, and the default-branch CI state. The account-wide `github-since` is unchanged.
+ */
+function qualifyGithubState(store: Store, repository: string): void {
+  const move = (from: string, to: string) => { store.set(to, store.get<unknown>(from)); store.delete(from) }
+  for (const family of [KV.github.cursor, KV.github.ci]) {
+    for (const name of store.keys(family.prefix)) {
+      const id = name.slice(family.prefix.length), qualified = qualifiedId(id, repository)
+      if (qualified !== id) move(name, family(qualified))
+    }
+  }
+  const retries = store.get<unknown>(KV.github.retries)
+  if (isObject(retries)) {
+    const qualified = Object.fromEntries(Object.entries(retries).map(([id, retry]) => [qualifiedId(id, repository), retry]))
+    if (JSON.stringify(qualified) !== JSON.stringify(retries)) store.set<unknown>(KV.github.retries, qualified)
+  }
+  // A schema 11 stream cursor is `github-stream:<stream>`; a stream ID holds no `:`, which a qualified key has after the repository.
+  for (const name of store.keys(KV.github.stream)) {
+    const stream = name.slice(KV.github.stream.prefix.length)
+    if (!stream.includes(':')) move(name, KV.github.stream(repository, stream))
+  }
+  if (store.get<unknown>('github-branch-ci') !== undefined) move('github-branch-ci', KV.github.branchCi(repository))
 }
