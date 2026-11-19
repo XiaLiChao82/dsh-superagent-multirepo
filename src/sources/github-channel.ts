@@ -14,17 +14,22 @@ const CommentSchema = z.looseObject({
 const gone = (error: unknown): boolean => error instanceof CliError
   && (error.code === 410 || (error.code === 403 && /locked/i.test(error.message)))
 const missing = (error: unknown): boolean => error instanceof CliError && (error.code === 404 || error.code === 410)
-/** Posts a comment or review-thread reply with an embedded HTML marker so retries do not create duplicate comments. */
+/**
+ * Posts a comment or review-thread reply with an embedded HTML marker so retries do not create duplicate comments; it goes to
+ * the address's repository, or to the default repository for an address that names none.
+ */
 export async function sendGithub(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
-  const { commands } = host
-  const { repository, github } = commands.deployment
+  const named = message.channel.address.repository
+  const commands = named && !sameName(named, host.commands.repository) ? host.commands.for(named) : host.commands
+  const { repository } = commands
+  const { github } = commands.deployment
   const number = Number(message.channel.address.number)
   if (!number) throw new Error('Missing GitHub reply target')
   try {
     // Retained trigger URLs also route replies queued before thread-aware delivery.
-    const address = githubAddress(message.channel.address.url ?? '', repository)
+    const address = githubAddress(message.channel.address.url ?? '')
     let rootId: number | undefined
-    if (address?.pr && address.discussion && address.number === number) {
+    if (address?.pr && address.discussion && address.number === number && sameName(address.repository, repository)) {
       // Fall back to a top-level PR comment if the target inline review comment was deleted.
       const source = await commands.api(CommentSchema, `pulls/comments/${address.discussion}`)
         .catch((error: unknown) => { if (missing(error)) return undefined; throw error })
@@ -45,8 +50,10 @@ export async function sendGithub(host: Pick<SourceContext, 'commands'>, message:
 }
 export function githubLink(address: Record<string, string>, links: ChannelLinks): ChannelLink {
   const number = address.number ?? ''
-  const review = !!links.repository && !!githubAddress(address.url ?? '', links.repository)?.discussion
-  return { url: address.url ?? (links.repository ? githubPage(links.repository, Number(number)) : ''),
+  const repository = address.repository ?? links.repository
+  const parsed = githubAddress(address.url ?? '')
+  const review = !!repository && !!parsed?.discussion && sameName(parsed.repository, repository)
+  return { url: address.url ?? (repository ? githubPage(repository, Number(number)) : ''),
     label: review ? { zh: `GitHub #${number} 的 review 讨论`, en: `Review discussion on GitHub #${number}` }
       : { zh: `GitHub #${number}`, en: `GitHub #${number}` } }
 }

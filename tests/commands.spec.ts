@@ -14,7 +14,7 @@ sources.register(feishuKind); sources.register(githubKind)
 const send = (commands: Commands, message: OutboundMessage) => sources.send(message, commands)
 const deployment = testDeployment({ github: { ...testDeployment().github, cli: '/path/agent-gh' } })
 const REPOSITORY = deployment.repository
-const reply = { id: 'stable-operation', channel: githubChannel(8), text: 'Done', kind: 'reply' as const }
+const reply = { id: 'stable-operation', channel: githubChannel(REPOSITORY, 8), text: 'Done', kind: 'reply' as const }
 describe('account-isolated operations', () => {
   it('uses the agent account\'s GitHub CLI and preserves literal shell metacharacters in argv', async () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal); const run = vi.spyOn(commands,'run').mockResolvedValue('{}')
@@ -50,7 +50,7 @@ describe('account-isolated operations', () => {
   it('routes review-comment replies to the root review comment', async () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal); vi.spyOn(commands,'pages').mockResolvedValue([])
     const gh = vi.spyOn(commands,'gh').mockResolvedValueOnce({ id: 7, in_reply_to_id: 3 }).mockResolvedValueOnce({})
-    await send(commands, { ...reply, channel: githubChannel(8, `https://github.com/${REPOSITORY}/pull/8#discussion_r7`) })
+    await send(commands, { ...reply, channel: githubChannel(REPOSITORY, 8, `https://github.com/${REPOSITORY}/pull/8#discussion_r7`) })
     expect(gh.mock.calls[1]![0]).toEqual(['api', `repos/${REPOSITORY}/pulls/8/comments/3/replies`, '--method', 'POST', '-f', expect.stringContaining('Done')])
   })
   it('uses Feishu bot identity and one idempotency key on retries', async () => {
@@ -79,6 +79,15 @@ describe('repository binding', () => {
   it('keeps the bound repository with another signal', async () => {
     const signalled = commands.for('acme/gizmos').withSignal(new AbortController().signal)
     expect(await calls(signalled)).toEqual(['repos/acme/gizmos/issues/8', 'repos/acme/gizmos/contents/README.md', 'repos/acme/gizmos/issues'])
+  })
+  it('posts a GitHub reply to the repository its address names', async () => {
+    // The reply reads and posts through the Commands bound to that repository.
+    const run = vi.spyOn(Commands.prototype, 'run').mockResolvedValueOnce('[[]]').mockResolvedValueOnce('{}')
+    try {
+      expect(await send(commands, { ...reply, channel: githubChannel('acme/gizmos', 8) })).toBe('sent')
+      expect(run.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([['api', 'repos/acme/gizmos/issues/8/comments'],
+        ['api', 'repos/acme/gizmos/issues/8/comments']])
+    } finally { run.mockRestore() }
   })
 })
 
@@ -130,19 +139,20 @@ describe('Channels', () => {
     const pages = vi.spyOn(value, 'pages').mockResolvedValue([])
     const gh = vi.spyOn(value, 'gh')
       .mockRejectedValueOnce(commandError({ stderr: 'gh: Not Found (HTTP 404)', code: 1 })).mockResolvedValueOnce({})
-    expect(await send(value, { ...reply, channel: githubChannel(8, `https://github.com/${REPOSITORY}/pull/8#discussion_r7`) })).toBe('sent')
+    expect(await send(value, { ...reply, channel: githubChannel(REPOSITORY, 8, `https://github.com/${REPOSITORY}/pull/8#discussion_r7`) })).toBe('sent')
     expect((pages.mock.calls[0] as unknown[])[1]).toBe('issues/8/comments')
     const post = ['api', `repos/${REPOSITORY}/issues/8/comments`, '--method', 'POST', '-f', expect.stringContaining('Done')]
     expect(gh.mock.calls[1]![0]).toEqual(post)
   })
   it('link each address to its page with its label', () => {
     const links = { repository: REPOSITORY, feishu: deployment.feishu! }
-    expect(githubKind.channel!.link(githubChannel(8).address, links)).toEqual({ url: `https://github.com/${REPOSITORY}/issues/8`,
+    expect(githubKind.channel!.link(githubChannel(REPOSITORY, 8).address, links)).toEqual({ url: `https://github.com/${REPOSITORY}/issues/8`,
       label: { zh: 'GitHub #8', en: 'GitHub #8' } })
     const review = `https://github.com/${REPOSITORY}/pull/8#discussion_r7`
-    expect(githubKind.channel!.link(githubChannel(8, review).address, links))
+    expect(githubKind.channel!.link(githubChannel(REPOSITORY, 8, review).address, links))
       .toEqual({ url: review, label: { zh: 'GitHub #8 的 review 讨论', en: 'Review discussion on GitHub #8' } })
-    expect(githubKind.channel!.link(githubChannel(8).address, {}).url).toBe('')
+    // An address that names no repository has no page without the deployment's default repository.
+    expect(githubKind.channel!.link({ number: '8' }, {}).url).toBe('')
     const message = feishuChannel('oc_1', 'om_1').address
     expect(feishuKind.channel!.link(message, links)).toEqual({ url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1',
       label: { zh: '飞书消息', en: 'Feishu message' }, triggerId: key('feishu', 'om_1') })
