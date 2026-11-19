@@ -66,13 +66,15 @@ export function search(host: ViewHost, query: string, links: Pick<TextCache, 'en
   for (const [name, url] of links.entries()) if (url === value) terms.add(name.split(':').at(-1)!)
   const found = new Map<string, Trigger>()
   for (const term of terms) for (const trigger of store.read.search(term)) found.set(trigger.id, trigger)
-  const threads = named.threads.flatMap(key => { const thread = store.threads.get(key); return thread ? [threadSummary(view, thread)]
+  // Named keys are built from the configured repository names; a Thread stored under another casing of one is the same Thread.
+  const threads = named.threads.flatMap(key => { const thread = store.threads.match(key); return thread ? [threadSummary(view, thread)]
     : [] })
   const lower = value.toLowerCase()
+  const keys = new Set(named.threads.map(key => key.toLowerCase()))
   // Match tickets by threads they own (e.g., bound PRs) or subscribe to, as well as by title.
   const reaches = (ticket: Ticket) => [...(ticket.follows ?? []).map(follow => follow.thread),
     ...view.threadsOf(ticket.id).map(thread => thread.key)]
-  const matches = (ticket: Ticket) => reaches(ticket).some(key => named.threads.includes(key)) || ticket.title.toLowerCase().includes(lower)
+  const matches = (ticket: Ticket) => reaches(ticket).some(key => keys.has(key.toLowerCase())) || ticket.title.toLowerCase().includes(lower)
   const tickets = store.tickets.list().filter(matches).sort(newestFirst).slice(0, 10).map(ticketSummary)
   // Omit automated triggers from threads already included in `threads`.
   const shownThreads = new Set(threads.map(thread => thread.key))

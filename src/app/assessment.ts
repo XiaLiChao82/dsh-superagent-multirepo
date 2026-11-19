@@ -9,6 +9,7 @@ import type { Commands } from '../infra/commands.ts'
 import type { Deployment } from '../deployment.ts'
 import { admissionContext } from '../sources/admission-context.ts'
 import { readRepositoryPath } from '../sources/github-read.ts'
+import { repositoryFor } from '../sources/github-trigger.ts'
 import type { TriggerContext } from '../sources/kind.ts'
 import { relatedTickets } from './cards.ts'
 import { textPage } from './context.ts'
@@ -102,6 +103,13 @@ export class MasterAssessor implements Assessor {
   }
   /** Enqueues an `assessment` effect to deliver `candidate`'s card to the main Session. */
   request(candidate: Candidate): void { this.host.effects.enqueue('assessment', candidate.evalId, { triggerId: candidate.triggers[0]!.id }) }
+  /**
+   * Commands acting on the repository `trigger`'s Ticket would work in (`repositoryFor`), so the Eval's Thread and repository
+   * reads go to that repository rather than the default one; the Feishu context reader ignores them.
+   */
+  private commandsFor(trigger: Trigger, signal: AbortSignal): Commands {
+    return this.host.commands.withSignal(signal).for(repositoryFor(trigger, this.host.deployment))
+  }
   /** Whether `evalId` is still the active evaluation for `trigger`. */
   private live(evalId: string, trigger: Trigger): boolean { return this.host.engine.candidate(trigger.id)?.evalId === evalId }
   /** Drop an Eval's context and reads once it finishes; any running load for it discards its result. */
@@ -151,7 +159,7 @@ export class MasterAssessor implements Assessor {
         try {
           const timeout = AbortSignal.timeout(this.host.deployment.admissionContextTimeoutMs.get())
           const signal = AbortSignal.any([this.controller.signal, ...(caller ? [caller] : []), timeout])
-          const commands = this.host.commands.withSignal(signal)
+          const commands = this.commandsFor(trigger, signal)
           const context = await admissionContext(thread, commands, this.host.deployment.admissionContextMaxPages.get())
           if (!current()) return
           reads.context = context
@@ -227,7 +235,7 @@ export class MasterAssessor implements Assessor {
       await this.seed(candidate.evalId, trigger, signal)
       const { cache } = this.reads(candidate.evalId, trigger)
       const { snapshots, images, messages, cursors } = cache
-      const commands = this.host.commands.withSignal(AbortSignal.any([this.controller.signal, signal]))
+      const commands = this.commandsFor(trigger, AbortSignal.any([this.controller.signal, signal]))
       if (read.resource === 'image') {
         if (read.offset !== 0) throw new Error('Images are not paginated; use offset 0')
         const image = images.get(read.image_id!)

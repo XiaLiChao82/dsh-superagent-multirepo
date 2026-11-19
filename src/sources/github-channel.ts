@@ -16,10 +16,13 @@ const gone = (error: unknown): boolean => error instanceof CliError
 const missing = (error: unknown): boolean => error instanceof CliError && (error.code === 404 || error.code === 410)
 /**
  * Posts a comment or review-thread reply with an embedded HTML marker so retries do not create duplicate comments; it goes to
- * the address's repository, or to the default repository for an address that names none.
+ * the address's repository, or to the default repository for an address that names none. An address of a repository that is
+ * not configured is `'gone'`.
  */
 export async function sendGithub(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const named = message.channel.address.repository
+  // A repository no longer configured never takes the reply, as a conversation that is gone.
+  if (named && !host.commands.deployment.repositories.some(repository => sameName(repository, named))) return 'gone'
   const commands = named && !sameName(named, host.commands.repository) ? host.commands.for(named) : host.commands
   const { repository } = commands
   const { github } = commands.deployment

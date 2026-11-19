@@ -17,27 +17,39 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
   const comments = bodies.map((body, i) => ({ id: i, html_url: `https://github.com/acme/widgets/issues/1#c${i}`,
     user: { login: 'bob' }, created_at: '2026-09-09T00:00:00Z', body }))
   const gate = { issue: undefined as Promise<void> | undefined }
-  const commands = {
-    repository: 'acme/widgets', deployment: testDeployment(),
-    withSignal() { return commands },
-    gh: vi.fn(async (args: string[]) => {
-      await gate.issue
-      const number = Number(/issues\/(\d+)/.exec(args[1]!)?.[1])
-      return args[1]!.includes('/comments') ? comments : { id: 100 + number, number, state: 'open',
-        html_url: `https://github.com/acme/widgets/issues/${number}`,
-        user: { login: 'bob' }, created_at: '2026-09-09T00:00:00Z', title: 'Issue', body: 'body' }
-    }),
-    run: vi.fn(async () => 'export const value = 1\n'),
-    // A string first argument is a raw file path; otherwise validate the fake gh response against the schema.
-    api: vi.fn(async (schema: unknown, ...rest: string[]) => typeof schema === 'string' ? 'export const value = 1\n'
-      : (schema as { parse(value: unknown): unknown }).parse(await (commands as unknown as { gh(args: string[]): Promise<unknown> }).gh(['api', rest[0]!]))),
-  } as unknown as Commands
+  const deployment = testDeployment({ repositories: ['acme/widgets', 'acme/gadgets'] })
+  /** GitHub reads as `<repository> <path>`, naming the repository of the Commands each went through. */
+  const reads: string[] = []
+  const bound = (repository: string): Commands => {
+    const commands = {
+      repository, deployment,
+      withSignal() { return commands },
+      for: (name: string) => bound(name),
+      gh: vi.fn(async (args: string[]) => {
+        reads.push(`${repository} ${args[1]}`)
+        await gate.issue
+        const number = Number(/issues\/(\d+)/.exec(args[1]!)?.[1])
+        return args[1]!.includes('/comments') ? comments : { id: 100 + number, number, state: 'open',
+          html_url: `https://github.com/acme/widgets/issues/${number}`,
+          user: { login: 'bob' }, created_at: '2026-09-09T00:00:00Z', title: 'Issue', body: 'body' }
+      }),
+      run: vi.fn(async () => 'export const value = 1\n'),
+      // A string first argument is a raw file path; otherwise validate the fake gh response against the schema.
+      api: vi.fn(async (schema: unknown, ...rest: string[]) => {
+        if (typeof schema === 'string') { reads.push(`${repository} ${schema}`); return 'export const value = 1\n' }
+        return (schema as { parse(value: unknown): unknown }).parse(await (commands as unknown as { gh(args: string[]): Promise<unknown> })
+          .gh(['api', rest[0]!]))
+      }),
+    } as unknown as Commands
+    return commands
+  }
+  const commands = bound('acme/widgets')
   const repo = new MemoryRepositories()
   const sources = new SourceRegistry(() => SettingsSchema.parse({}))
   sources.register(githubKind)
   let engine!: Engine
   const host: AssessorHost = {
-    get engine() { return engine }, commands, deployment: testDeployment(), settings: () => SettingsSchema.parse({}),
+    get engine() { return engine }, commands, deployment, settings: () => SettingsSchema.parse({}),
     threadContext: threadContext ?? (trigger => sources.threadContext(trigger)),
     effects: { enqueue: () => {}, handle: () => {} }, paused: () => false, deliver: async () => {}, candidateCard: async candidate => ({ eval_id: candidate.evalId }),
   }
@@ -57,7 +69,7 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
   // Per-Eval state retained by the assessor and released when the Eval ends.
   const kept = assessor as unknown as { evals: Map<string, unknown> }
   const size = () => kept.evals.size
-  return { repo, engine, assessor, tools, size, gate }
+  return { repo, engine, assessor, tools, size, gate, reads }
 }
 const issue = (n: number): Trigger => ({ id: `issue-${n}`, source: 'github', threads: [{ source: 'github', id: String(n) }], actor: { source: 'github', id: 'bob' }, human: true,
   at: new Date(Date.UTC(2026, 8, 9, 0, 0, n)).toISOString(), text: `issue ${n}`, url: `https://github.com/acme/widgets/issues/${n}`, meta: { number: n } })
@@ -110,6 +122,16 @@ it('reads the context of a Trigger through its Source, and none for a Source tha
   // The Trigger's own text is still readable when its Source provides no Thread context.
   expect(await s.tools.orchestrator_eval_read!({ trigger_id: 'other-2', resource: 'message', offset: 0 },
     signal)).toMatchObject({ text: 'issue 2' })
+})
+it('reads the Thread and the files of a Trigger of the second repository in that repository', async () => {
+  const s = setup()
+  const gadgets: Trigger = { ...issue(3), id: 'gadgets-3', threads: [{ source: 'github', id: 'acme/gadgets#3' }],
+    url: 'https://github.com/acme/gadgets/issues/3', meta: { repository: 'acme/gadgets', number: 3 } }
+  s.engine.receive(gadgets); s.engine.evaluateDue()
+  await s.assessor.context('gadgets-3', signal)
+  await s.tools.orchestrator_eval_read!({ trigger_id: 'gadgets-3', resource: 'file', path: 'src/value.ts', offset: 0 }, signal)
+  expect(s.reads).toEqual(['acme/gadgets issues/3', 'acme/gadgets issues/3/comments?per_page=100&page=1',
+    'acme/gadgets contents/src/value.ts'])
 })
 it('routes an explicit candidate instead of assessing it: each eval tool names the routing tools', async () => {
   const s = setup('explicit')

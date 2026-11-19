@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { canRetry, followupOwners, latestReport, liveTicket, settled, threadKey, ticketStage, type ActorRef, type ChannelRef, type Decision,
   type DecisionKind, type Thread, type ThreadFacts, type Ticket, type TicketStage, type Trigger } from '../../core/index.ts'
 import { allowedSender, listedBot } from '../../policy.ts'
+import { githubThreadOf, SOURCE as GITHUB } from '../../sources/github-trigger.ts'
 import type { ChannelLink, Localized } from '../../sources/kind.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
 import { workerSessionId } from '../../executor/dsh.ts'
@@ -143,6 +144,13 @@ export const ticketLine = (view: Snapshot, ticket: Ticket) => ({ ...ticketSummar
 export function threadTitle(store: Pick<Store, 'read'>, thread: Thread): string {
   const label = attribute(thread.meta.label)
   if (label) return label
+  // A GitHub Issue or PR without a label is named by its repository and number, `#12` for a record kept without its repository.
+  if (thread.ref.source === GITHUB) {
+    const named = githubThreadOf(thread.ref.id)
+    const repository = named?.repository ?? attribute(thread.meta.repository)
+    const number = named?.number ?? (/^[1-9]\d*$/.test(thread.ref.id) ? thread.ref.id : undefined)
+    if (number !== undefined) return repository ? `${repository}#${number}` : `#${number}`
+  }
   // Prefer the first human trigger over automated triggers when deriving a fallback thread title.
   const first = store.read.firstTrigger(thread.key, true) ?? store.read.firstTrigger(thread.key)
   return first ? preview(first.text, 80) : thread.key

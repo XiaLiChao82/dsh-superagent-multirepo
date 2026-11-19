@@ -1065,6 +1065,16 @@ describe('github source', () => {
       expect(h.store.threads.get('github:acme/widgets#41')).toMatchObject({ subscriptions: ['t1'], meta: { repository: 'acme/widgets', number: 41 } })
       h.store.close()
     })
+    it('gives the end of PR #5 of each repository its own notice in one chat', () => {
+      const chat = { source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_1' } }
+      const ended = (repository: string): Ticket => ({ ...openTicket(repository), channels: [chat],
+        follows: [{ thread: `github:${repository}#5`, own: true, closed: { at: '2026-09-02T00:00:00.000Z', outcome: 'merged' } }],
+        ended: { by: 'executor', outcome: 'merged', at: '2026-09-02T00:00:00.000Z' } })
+      const ids = ['acme/widgets', 'acme/gadgets'].flatMap(repository => pullEndNotices(ended(repository), 'fix', 'acme/widgets')
+        .map(notice => notice.id))
+      expect(ids).toHaveLength(2)
+      expect(new Set(ids).size).toBe(2)
+    })
     it('binds an agent\'s PR by itself only to the ticket on its branch that works in the PR\'s repository', async () => {
       const h = host({ deployment: twoRepositories() })
       const request = feishuTrigger({ message_id: 'om_7', chat_id: 'oc_1', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',

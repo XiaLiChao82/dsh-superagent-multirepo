@@ -6,6 +6,7 @@ import { readGithub } from '../sources/github-read.ts'
 import { feishuReferences, feishuRead } from '../sources/feishu-read.ts'
 import { feishuRef } from '../sources/feishu.ts'
 import { feishuTriggerId } from '../sources/feishu-trigger.ts'
+import { repositoryFor } from '../sources/github-trigger.ts'
 import { ASSIGNMENTS, INPUTS, assignmentLine, decisionCard, decisionDetails, inputLine, newestPage, preview, textPage, threadCard, ticketCard,
   ticketDetails, triggerCard, type TicketThread } from './cards.ts'
 import { threadTitle } from './views/records.ts'
@@ -108,6 +109,15 @@ async function sourcePage(read: Read, source: string, fetch: () => Promise<unkno
   if (offset === 0) host.pages.set(`${sessionId}:${resource}`, body)
   return text(read, body)
 }
+/**
+ * Commands for a `github/…` read: a worker reads its Ticket's repository, the one its origin Trigger names (`repositoryFor`);
+ * the main Session, which has no Ticket, reads the default repository.
+ */
+function githubCommands({ host, ticketId, signal }: Read): Commands {
+  const commands = host.commands.withSignal(signal)
+  const ticket = ticketId ? host.store.tickets.get(ticketId) : undefined
+  return ticket ? commands.for(repositoryFor(host.store.triggers.get(ticket.origin.triggerId), commands.deployment)) : commands
+}
 const THREAD_DECISIONS = 5
 const triggerLine = (trigger: Trigger) => ({ trigger_id: trigger.id, actor: trigger.actor.id, human: trigger.human, at: trigger.at,
   preview: preview(trigger.text), chars: trigger.text.length, read: `trigger/${trigger.id}` })
@@ -206,7 +216,7 @@ const ROUTES: readonly Route[] = [
     const commands = read.host.commands.withSignal(read.signal)
     return sourcePage(read, 'feishu', () => feishuRead(commands, ref, read.resource, read.host.feishuPageSize()))
   }],
-  ['github/', read => sourcePage(read, 'github', () => readGithub(read.host.commands.withSignal(read.signal), read.resource))],
+  ['github/', read => sourcePage(read, 'github', () => readGithub(githubCommands(read), read.resource))],
   ['trigger/', async read => {
     const { host, rest, ticketId, offset, signal } = read
     if (!rest || rest.includes('/')) throw new Error('Unknown context resource')

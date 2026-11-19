@@ -116,7 +116,9 @@ export function pullEndNotices(ticket: Ticket, request: string, repository: stri
   const text = chinese
     ? outcome === 'merged' ? `[${name}](${url}) 已合并。` : `[${name}](${url}) 已关闭，未合并。`
     : outcome === 'merged' ? `[${name}](${url}) has merged.` : `[${name}](${url}) was closed without merging.`
-  // GitHub timelines and linked issues already show the merge or closure, so GitHub channels are skipped.
+  // GitHub timelines and linked issues already show the merge or closure, so GitHub channels are skipped. The id names the PR's
+  // repository, so equal PR numbers of two repositories ending at one chat stay two notices.
   return ticket.channels.filter(channel => channel.source !== SOURCE).map(channel => ({
-    id: key('pr-terminal', String(number), channel.source, JSON.stringify(channel.address), outcome), channel, text, kind: 'notice', ticketId: ticket.id }))
+    id: key('pr-terminal', pull.repository, String(number), channel.source, JSON.stringify(channel.address), outcome), channel, text,
+    kind: 'notice', ticketId: ticket.id }))
 }

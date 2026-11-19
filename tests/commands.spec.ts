@@ -89,6 +89,13 @@ describe('repository binding', () => {
         ['api', 'repos/acme/gizmos/issues/8/comments']])
     } finally { run.mockRestore() }
   })
+  it('drops a GitHub reply to a repository that is no longer configured, without calling GitHub', async () => {
+    const run = vi.spyOn(Commands.prototype, 'run')
+    try {
+      expect(await send(commands, { ...reply, channel: githubChannel('acme/retired', 8) })).toBe('gone')
+      expect(run).not.toHaveBeenCalled()
+    } finally { run.mockRestore() }
+  })
 })
 
 it('reports Feishu failures with their code and without command arguments', () => {

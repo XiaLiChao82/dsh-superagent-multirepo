@@ -2,6 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { Commands } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 import { readGithub, pullChecks } from '../src/sources/github-read.ts'
+import { feishuTrigger } from '../src/sources/feishu-trigger.ts'
+import { readResource, type ResourceHost } from '../src/app/resources.ts'
+import { TextCache } from '../src/app/cache.ts'
 
 const commands = new Commands(() => testDeployment(), {}, new AbortController().signal)
 afterEach(() => vi.restoreAllMocks())
@@ -10,6 +13,25 @@ it('reads a bounded comment page and exposes the next page reference', async () 
   const gh = vi.spyOn(commands, 'gh').mockResolvedValue(Array.from({ length: 20 }, (_, id) => ({ id, body: 'comment' })))
   expect(await readGithub(commands, 'github/issues/123/comments/2')).toMatchObject({ next_resource: 'github/issues/123/comments/3' })
   expect(gh).toHaveBeenCalledWith(['api', 'repos/acme/widgets/issues/123/comments?per_page=20&page=2'])
+})
+
+it('reads github/… for a worker in its ticket\'s repository: the one its Feishu message names, else the default', async () => {
+  const deployment = testDeployment({ repositories: ['acme/widgets', 'acme/gadgets'] })
+  const message = (id: string, text: string) => feishuTrigger({ message_id: id, chat_id: 'oc_1', chat_type: 'p2p', sender_id: 'ou_alice',
+    sender_type: 'user', content: text, create_time: '1' }, 'ou_bot', 'cli_bot')!
+  // t1 started from a message naming the second repository; t2 from one naming none.
+  const triggers = new Map([['t1', message('om_1', 'gadgets 的登录问题')], ['t2', message('om_2', '登录有问题')]])
+  const host = { pages: new TextCache(100_000), masterId: 'master',
+    commands: new Commands(() => deployment, {}, new AbortController().signal),
+    store: { tickets: { get: (id: string) => triggers.has(id) ? { id, origin: { triggerId: triggers.get(id)!.id } } : undefined },
+      triggers: { get: (id: string) => [...triggers.values()].find(trigger => trigger.id === id) } } } as unknown as ResourceHost
+  const gh = vi.spyOn(Commands.prototype, 'gh').mockResolvedValue({ id: 1, number: 3, title: 'Login', state: 'open', body: 'fails',
+    user: { login: 'bob' }, created_at: '2026-09-09T00:00:00Z', html_url: 'https://github.com/acme/gadgets/issues/3' })
+  await readResource(host, 'github/issues/3', 0, undefined, 't1')
+  await readResource(host, 'github/issues/3', 0, undefined, 't2')
+  await readResource(host, 'github/issues/3', 0, undefined)
+  expect(gh.mock.calls.map(([args]) => args[1])).toEqual(['repos/acme/gadgets/issues/3', 'repos/acme/widgets/issues/3',
+    'repos/acme/widgets/issues/3'])
 })
 
 it('rejects unsupported or escaping paths without making a request', async () => {

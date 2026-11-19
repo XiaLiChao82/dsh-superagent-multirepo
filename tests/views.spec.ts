@@ -7,9 +7,10 @@ import { SettingsSchema } from '../src/policy.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind } from '../src/sources/github.ts'
-import { snapshot, threadSummary, ticketSummary, triggerView } from '../src/app/views/records.ts'
+import { snapshot, threadSummary, threadTitle, ticketSummary, triggerView } from '../src/app/views/records.ts'
 import { basisFacts, ticketDetail } from '../src/app/views/tickets.ts'
-import { threadDetail } from '../src/app/views/threads.ts'
+import { search, threadDetail } from '../src/app/views/threads.ts'
+import { TextCache } from '../src/app/cache.ts'
 import { droppedReplies, sourcesStatus } from '../src/app/views/sources.ts'
 import { overview } from '../src/app/views/overview.ts'
 import { markdown, plain } from '../src/app/views/text.ts'
@@ -65,6 +66,26 @@ const live = (id: string) => store.tickets.save({ id, title: id, decisionId: 'd'
   origin: { triggerId: 'e0', triggerIds: ['e0'] }, assignments: [], inputs: [] })
 const message = (id: string, actor: { source: string; id: string }, human = true) => ({ id, source: actor.source,
   threads: [{ source: 'feishu', id: 'oc_1:om_root' }], actor, human, at, text: `message ${id}`, meta: {} })
+
+it('finds #12 of each watched repository, under GitHub\'s casing of its name too, and names a GitHub Thread without a label by it', () => {
+  const host = views()
+  store.saveSettings({ ...store.settings(), sources: { github: { enabled: true, config: { repositories: [{ repository: 'acme/widgets' },
+    { repository: 'acme/gadgets' }] } } } })
+  const thread = (key: string, id: string, meta: Record<string, unknown> = {}) => store.threads.save({ key, ref: { source: 'github', id },
+    createdAt: at, subscriptions: [], correlated: [], pending: [], meta })
+  thread('github:acme/widgets#12', 'acme/widgets#12', { repository: 'acme/widgets' })
+  // GitHub's canonical casing of the second repository differs from the configured name.
+  thread('github:Acme/Gadgets#12', 'Acme/Gadgets#12', { repository: 'Acme/Gadgets', label: 'Acme/Gadgets#12 Login fails' })
+  live('t1')
+  store.tickets.save({ ...store.tickets.get('t1')!, follows: [{ thread: 'github:Acme/Gadgets#12', own: true }] })
+  const found = search(host, '#12', new TextCache(0))
+  expect(found.threads.map(item => [item.key, item.title])).toEqual([['github:acme/widgets#12', 'acme/widgets#12'],
+    ['github:Acme/Gadgets#12', 'Acme/Gadgets#12 Login fails']])
+  expect(found.tickets.map(ticket => ticket.id)).toEqual(['t1'])
+  // A record an older version kept without its repository keeps its bare number.
+  thread('github:7', '7')
+  expect(threadTitle(store, store.threads.get('github:7')!)).toBe('#7')
+})
 
 it('names each sender as the Policy lists it, by its id where the id is readable, and as its kind names one it does not list', () => {
   const view = snapshot(views())
