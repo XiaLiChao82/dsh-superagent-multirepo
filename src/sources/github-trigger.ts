@@ -47,19 +47,23 @@ const NAME = 'A-Za-z0-9_.\\-'
 const ENDS = `(?![A-Za-z0-9_\\-]|\\.[${NAME}])`
 /** Ends a bare name, which is not part of a path either: no name character or `/` next, though a sentence's closing period may be. */
 const ENDS_WORD = `(?![A-Za-z0-9_\\-/]|\\.[${NAME}/])`
+/** A bare name or an alias as a whole word: next to no name character or `/`. */
+const word = (name: string): string => `(?<![${NAME}/])${escapeRegExp(name)}${ENDS_WORD}`
 /**
  * The configured repository `text` names, with its configured casing. Rules, in order, each taking the match nearest the
  * start of the text: a whole `owner/name`; a `github.com` URL of a repository; the bare name (the part after `/`) as a whole
- * word, next to no name character or `/`. All case-insensitive; undefined when none matches.
+ * word, next to no name character or `/`; an alias of `aliases` as a whole word, which names the repository it maps to. All
+ * case-insensitive; undefined when none matches.
  */
-export function repositoryInText(text: string, repositories: readonly string[]): string | undefined {
-  const rules = [
-    (repository: string) => `(?<![${NAME}/])${escapeRegExp(repository)}${ENDS}`,
-    (repository: string) => `github\\.com/${escapeRegExp(repository)}${ENDS}`,
-    (repository: string) => `(?<![${NAME}/])${escapeRegExp(repository.slice(repository.indexOf('/') + 1))}${ENDS_WORD}`,
+export function repositoryInText(text: string, repositories: readonly string[], aliases: Readonly<Record<string, string>> = {}): string | undefined {
+  const rules: [repository: string, pattern: string][][] = [
+    repositories.map(repository => [repository, `(?<![${NAME}/])${escapeRegExp(repository)}${ENDS}`]),
+    repositories.map(repository => [repository, `github\\.com/${escapeRegExp(repository)}${ENDS}`]),
+    repositories.map(repository => [repository, word(repository.slice(repository.indexOf('/') + 1))]),
+    Object.entries(aliases).map(([alias, repository]) => [repository, word(alias)]),
   ]
   for (const rule of rules) {
-    const found = repositories.map(repository => ({ repository, at: new RegExp(rule(repository), 'i').exec(text)?.index ?? -1 }))
+    const found = rule.map(([repository, pattern]) => ({ repository, at: new RegExp(pattern, 'i').exec(text)?.index ?? -1 }))
       .filter(item => item.at >= 0).sort((a, b) => a.at - b.at)[0]
     if (found) return found.repository
   }
@@ -67,12 +71,12 @@ export function repositoryInText(text: string, repositories: readonly string[]):
 }
 /**
  * The repository a Ticket started by `trigger` works in: a GitHub Trigger's configured `meta.repository`; else the configured
- * repository the Trigger's text names (such as a Feishu message's); else the default repository.
+ * repository the Trigger's text names (such as a Feishu message's), by name or by alias; else the default repository.
  */
-export function repositoryFor(trigger: Trigger | undefined, deployment: Pick<Deployment, 'repository' | 'repositories'>): string {
+export function repositoryFor(trigger: Trigger | undefined, deployment: Pick<Deployment, 'repository' | 'repositories' | 'aliases'>): string {
   const named = trigger?.source === SOURCE && typeof trigger.meta.repository === 'string' ? trigger.meta.repository : undefined
   const own = named === undefined ? undefined : deployment.repositories.find(repository => sameName(repository, named))
-  return own ?? (trigger && repositoryInText(trigger.text, deployment.repositories)) ?? deployment.repository
+  return own ?? (trigger && repositoryInText(trigger.text, deployment.repositories, deployment.aliases)) ?? deployment.repository
 }
 /** GitHub returns a deleted account as `null` and displays it as `ghost`. */
 export const UserSchema = z.looseObject({ login: z.string(), type: z.string().optional() }).nullable()

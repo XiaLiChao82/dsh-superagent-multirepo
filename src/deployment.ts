@@ -44,9 +44,12 @@ export function machineOf(config: DeploymentConfig): Machine {
 }
 
 const RepositoryName = z.string().trim().regex(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/, 'owner/name').default('')
-/** GitHub Source account fields: `repositories` rows, in order, the first being the default; `repository` is the legacy single field, still read. */
+/**
+ * GitHub Source account fields: `repositories` rows, in order, the first being the default, each with optional `aliases` (short
+ * names a Feishu message may use, separated by commas or spaces); `repository` is the legacy single field, still read.
+ */
 export const GithubAccountsSchema = z.object({
-  repositories: z.array(z.object({ repository: RepositoryName }).strict()).default([]),
+  repositories: z.array(z.object({ repository: RepositoryName, aliases: z.string().trim().default('') }).strict()).default([]),
   repository: RepositoryName,
   cli: z.string().trim().default(''),
 })
@@ -67,6 +70,16 @@ export function repositoriesOf(config: unknown): string[] {
   const names = rows.length ? rows : OWNER_NAME.test(legacy) ? [legacy] : []
   return names.filter((name, index) => names.findIndex(other => sameName(other, name)) === index)
 }
+/**
+ * The aliases of a stored GitHub Source configuration, in configured order: each row that names a repository yields one pair per
+ * alias, split on commas and whitespace. Never throws: malformed configuration yields no pairs.
+ */
+export function repositoryAliasesOf(config: unknown): { alias: string; repository: string }[] {
+  const parsed = GithubAccountsSchema.safeParse(config ?? {})
+  if (!parsed.success) return []
+  return parsed.data.repositories.filter(row => row.repository)
+    .flatMap(row => row.aliases.split(/[\s,]+/).filter(Boolean).map(alias => ({ alias, repository: row.repository })))
+}
 function legacyOf(config: unknown): string | undefined {
   const value = config && typeof config === 'object' && 'repository' in config ? config.repository : undefined
   return typeof value === 'string' ? value.trim() : undefined
@@ -77,6 +90,8 @@ export interface Deployment extends Machine {
   repository: string
   /** The configured repositories by the canonical `owner/name` GitHub reports, in configured order, without duplicates. */
   repositories: string[]
+  /** Lowercased alias to the canonical repository of the row it belongs to; the first row wins for an alias given twice. */
+  aliases: Record<string, string>
   github: { cli: string; login: string; noreply: string }
   feishu?: FeishuBot
 }
@@ -121,6 +136,8 @@ export async function resolveDeployment(machine: Machine, github: unknown, probe
   const agent = parsed(GithubUser, text)
   if (!agent) throw new SetupError('agentCliNoAccount')
   const repositories: string[] = []
+  /** Canonical name by the lowercased configured name, so aliases follow a renamed repository. */
+  const canonical = new Map<string, string>()
   for (const remote of remotes) {
     // Use the canonical repository name returned by GitHub so renamed repositories match incoming notifications.
     const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']).catch((error: unknown) => {
@@ -131,8 +148,15 @@ export async function resolveDeployment(machine: Machine, github: unknown, probe
     if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository })
     // A former and a current name of one repository resolve to the same canonical name.
     if (!repositories.some(name => sameName(name, repository))) repositories.push(repository)
+    canonical.set(remote.toLowerCase(), repository)
   }
-  return { ...machine, repository: repositories[0]!, repositories, github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
+  // A Map keeps aliases such as `constructor` or `__proto__` from colliding with object properties.
+  const aliases = new Map<string, string>()
+  for (const { alias, repository } of repositoryAliasesOf(accounts)) {
+    const resolved = canonical.get(repository.toLowerCase())
+    if (resolved && !aliases.has(alias.toLowerCase())) aliases.set(alias.toLowerCase(), resolved)
+  }
+  return { ...machine, repository: repositories[0]!, repositories, aliases: Object.fromEntries(aliases), github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })

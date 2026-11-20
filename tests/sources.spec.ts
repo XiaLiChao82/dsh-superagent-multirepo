@@ -1022,6 +1022,27 @@ describe('github source', () => {
       expect(values).toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: 'TGR-Robotics/epic_robot',
         DSH_SUPERAGENT_GITHUB_REPOSITORIES: 'acme/widgets,TGR-Robotics/epic_robot' })
     })
+    it('routes a message by a configured alias, as a whole word, after the full name, page, and bare name', () => {
+      const deployment = testDeployment({ repositories: ['acme/widgets', 'TGR-Robotics/A2_HMI', 'TGR-Robotics/epic_robot'],
+        aliases: { hmi: 'TGR-Robotics/A2_HMI', robot: 'TGR-Robotics/epic_robot', ros: 'TGR-Robotics/epic_robot' } })
+      const message = (text: string) => feishuTrigger({ message_id: 'om_1', chat_id: 'oc_1', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
+        content: text, create_time: '1' }, 'ou_bot', 'cli_bot')!
+      expect(repositoryFor(message('hmi 的按钮不亮'), deployment)).toBe('TGR-Robotics/A2_HMI')
+      expect(repositoryFor(message('robot 启动失败'), deployment)).toBe('TGR-Robotics/epic_robot')
+      // Case-insensitive, and next to text that is no name character.
+      expect(repositoryFor(message('看看ROS的节点'), deployment)).toBe('TGR-Robotics/epic_robot')
+      expect(repositoryFor(message('The HMI freezes.'), deployment)).toBe('TGR-Robotics/A2_HMI')
+      // The full name and the bare name win over an alias that comes earlier.
+      expect(repositoryFor(message('ros 也坏了，见 TGR-Robotics/A2_HMI'), deployment)).toBe('TGR-Robotics/A2_HMI')
+      expect(repositoryFor(message('hmi 和 epic_robot 都有问题'), deployment)).toBe('TGR-Robotics/epic_robot')
+      // A word that is no alias falls back to the default repository.
+      expect(repositoryFor(message('gui 有问题'), deployment)).toBe('acme/widgets')
+      // An alias inside a longer name is not the alias.
+      expect(repositoryInText('see A2_HMI, my-hmi-tool, src/hmi and hmi2', ['acme/widgets'], { hmi: 'acme/widgets' })).toBeUndefined()
+      // The execution environment names the repository the alias routes to.
+      const values = githubKind.environment!.values({ deployment, config: githubKind.schema.parse({}), trigger: message('hmi 的按钮不亮') })
+      expect(values).toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: 'TGR-Robotics/A2_HMI' })
+    })
     it('finds the Thread of an Issue page of a watched repository, and Issue #12 of each watched repository', () => {
       const config = githubKind.schema.parse({ repositories: [{ repository: 'acme/widgets' }, { repository: 'acme/gadgets' }] })
       expect(githubKind.find!('#12', config).threads).toEqual(['github:acme/widgets#12', 'github:acme/gadgets#12'])
@@ -1155,11 +1176,15 @@ it('saves a single-repository GitHub configuration as the repositories list, wit
   expect(folded).not.toHaveProperty('repository')
   // A configured list keeps its order, the first being the default repository.
   expect(githubKind.schema.parse({ repositories: [{ repository: 'acme/gadgets' }, { repository: 'acme/widgets' }] }).repositories)
-    .toEqual([{ repository: 'acme/gadgets' }, { repository: 'acme/widgets' }])
+    .toEqual([{ repository: 'acme/gadgets', aliases: '' }, { repository: 'acme/widgets', aliases: '' }])
+  // Saving keeps each row's aliases; a folded legacy repository has none.
+  expect(githubKind.schema.parse({ repositories: [{ repository: 'TGR-Robotics/A2_HMI', aliases: 'hmi' }, { repository: 'TGR-Robotics/epic_robot', aliases: 'robot, ros' }] }).repositories)
+    .toEqual([{ repository: 'TGR-Robotics/A2_HMI', aliases: 'hmi' }, { repository: 'TGR-Robotics/epic_robot', aliases: 'robot, ros' }])
+  expect(folded.repositories).toEqual([{ repository: 'acme/widgets', aliases: '' }])
 })
 it('edits the GitHub repositories as one list of owner/name rows, with no single repository field', () => {
   const field = githubKind.fields.find(item => item.key === 'repositories')
-  expect(field).toMatchObject({ type: 'rows', columns: [{ key: 'repository', type: 'text' }] })
+  expect(field).toMatchObject({ type: 'rows', columns: [{ key: 'repository', type: 'text' }, { key: 'aliases', type: 'text', optional: true }] })
   const column = (field as Extract<FieldSpec, { type: 'rows' }>).columns[0] as { pattern?: string }
   // A browser checks an input against its pattern as a whole, in the `v` mode.
   const pattern = new RegExp(`^(?:${column.pattern})$`, 'v')

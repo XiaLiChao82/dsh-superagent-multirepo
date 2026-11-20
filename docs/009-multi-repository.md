@@ -66,7 +66,9 @@ The repository is part of a GitHub Thread's native ID, so the same Issue number 
 
 `repositoryFor(trigger, deployment, config)` in `sources/github.ts` is the single implementation, used by the Source's `environment.values` and by the panel.
 
-`repositoryInText(text, repositories)` matches, in order: a whole `owner/name`, a `github.com` URL for a configured repository, then a bare repository name as a whole word (case-insensitive). The first match wins; no match returns `undefined`.
+`repositoryInText(text, repositories, aliases)` matches, in order: a whole `owner/name`, a `github.com` URL for a configured repository, a bare repository name as a whole word, then an alias as a whole word (all case-insensitive). The rule order wins over the position in the text (a full name beats an earlier alias); within one rule the match nearest the start wins; no match returns `undefined`.
+
+Aliases are configured per repository row, in its optional `aliases` column: short names separated by commas or spaces, for example `hmi` on the `TGR-Robotics/A2_HMI` row and `robot, ros` on the `TGR-Robotics/epic_robot` row. An alias matches only as a whole word, like a bare name, so `hmi` does not match in `A2_HMI`, `my-hmi-tool`, or `hmi2`. `repositoryAliasesOf()` in `deployment.ts` reads them from a stored configuration; `resolveDeployment` maps each lowercased alias to the canonical name of its row's repository in `Deployment.aliases` (the first row wins for an alias given twice). Changing the aliases is a setup change and restarts the service.
 
 A new variable `DSH_SUPERAGENT_GITHUB_REPOSITORIES` lists every configured repository, comma separated.
 

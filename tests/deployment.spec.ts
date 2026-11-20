@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, repositoriesOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, executable, machineOf, repositoriesOf, repositoryAliasesOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 
 const exec = promisify(execFile)
@@ -75,6 +75,24 @@ describe('configured repositories', () => {
   })
 })
 
+describe('repository aliases', () => {
+  it('splits each row\'s aliases on commas and whitespace, in configured order', () => {
+    expect(repositoryAliasesOf({ repositories: [{ repository: 'TGR-Robotics/A2_HMI', aliases: 'hmi' }, { repository: 'acme/widgets' },
+      { repository: 'TGR-Robotics/epic_robot', aliases: 'robot, ros,,bot  arm' }] })).toEqual([
+      { alias: 'hmi', repository: 'TGR-Robotics/A2_HMI' }, { alias: 'robot', repository: 'TGR-Robotics/epic_robot' },
+      { alias: 'ros', repository: 'TGR-Robotics/epic_robot' }, { alias: 'bot', repository: 'TGR-Robotics/epic_robot' },
+      { alias: 'arm', repository: 'TGR-Robotics/epic_robot' }])
+  })
+  it('drops the aliases of a row that names no repository', () => {
+    expect(repositoryAliasesOf({ repositories: [{ repository: '', aliases: 'orphan' }, { repository: 'acme/widgets', aliases: 'w' }] }))
+      .toEqual([{ alias: 'w', repository: 'acme/widgets' }])
+  })
+  it('reads malformed configuration without throwing, as no aliases', () => {
+    for (const config of [undefined, null, 'hmi', { repositories: 'acme/widgets' }, { repositories: [{ repository: 'acme/widgets', aliases: 3 }] },
+      { repositories: [{ repository: 'acme/widgets', aliases: 'w', extra: 1 }] }]) expect(repositoryAliasesOf(config)).toEqual([])
+  })
+})
+
 describe('setup', () => {
   /** Fake gh CLI with push access to acme/widgets (also reached by its former name acme/gadgets) and the given access to acme/gizmos; other repositories are unreadable. */
   const many = (gizmosPush: boolean): string => program(join(dir, 'bin', 'gh-many'), `case "$*" in
@@ -88,6 +106,15 @@ esac`)
     const deployment = await resolveDeployment(machine(), { repositories: rows('ACME/Gizmos', 'acme/widgets', 'acme/gadgets'), cli: many(true) }, probe, path)
     // acme/gadgets is a former name of acme/widgets, so it resolves to a repository already listed.
     expect(deployment).toMatchObject({ repository: 'acme/gizmos', repositories: ['acme/gizmos', 'acme/widgets'] })
+  })
+  it('maps each lowercased alias to the canonical name of its row\'s repository, the first row winning', async () => {
+    const deployment = await resolveDeployment(machine(), { repositories: [{ repository: 'ACME/Gizmos', aliases: 'GZ, shared' },
+      { repository: 'acme/gadgets', aliases: 'old shared' }, { repository: 'acme/widgets', aliases: 'constructor' }], cli: many(true) }, probe, path)
+    // acme/gadgets was renamed acme/widgets, so its alias names the current name.
+    expect(deployment.aliases).toEqual({ gz: 'acme/gizmos', shared: 'acme/gizmos', old: 'acme/widgets', constructor: 'acme/widgets' })
+    // Setup is all-or-nothing: a repository that fails its probe leaves no deployment, so its aliases reach no map.
+    await expect(resolveDeployment(machine(), { repositories: [{ repository: 'acme/widgets', aliases: 'w' }, { repository: 'acme/missing', aliases: 'm' }],
+      cli: many(true) }, probe, path)).rejects.toEqual(setupError('github', 'repositoryUnreadable', { repository: 'acme/missing' }))
   })
   it('fails setup naming the configured repository the account cannot push to or read', async () => {
     await expect(resolveDeployment(machine(), { repositories: rows('acme/widgets', 'ACME/Gizmos'), cli: many(false) }, probe, path))

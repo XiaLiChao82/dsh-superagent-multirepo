@@ -29,10 +29,12 @@ const GithubConfigObject = GithubAccountsSchema.extend({ pollSeconds: z.number()
   observeCi: z.boolean().default(false) }).strict()
 /**
  * The configuration with the legacy `repository` folded into `repositories` (docs/009-multi-repository.md), so a stored
- * single-repository configuration is saved as a list on its next save.
+ * single-repository configuration is saved as a list on its next save. Each kept row keeps its aliases; a folded legacy
+ * repository has none.
  */
-const GithubConfigSchema = GithubConfigObject.transform(({ repository: _legacy, ...config }) =>
-  ({ ...config, repositories: repositoriesOf({ ...config, repository: _legacy }).map(repository => ({ repository })) }))
+const GithubConfigSchema = GithubConfigObject.transform(({ repository: legacy, ...config }) =>
+  ({ ...config, repositories: repositoriesOf({ ...config, repository: legacy })
+    .map(repository => config.repositories.find(row => row.repository === repository) ?? { repository, aliases: '' }) }))
 export type GithubConfig = z.infer<typeof GithubConfigSchema>
 const OBSERVED = { issues: 'observeIssues', pulls: 'observePulls', comments: 'observeComments', ci: 'observeCi' } as const
 type Scope = keyof typeof OBSERVED
@@ -51,8 +53,9 @@ export const githubKind: SourceKind<GithubConfig> = {
     { key: 'cli', type: 'text', label: { zh: '智能体的 GitHub CLI', en: 'Agent GitHub CLI' },
       hint: { zh: '命令名或绝对路径，通常是用 GH_CONFIG_DIR 登录智能体账号的 gh 包装脚本。智能体以它登录的账号行事，执行器以 gh 调用它。保存时检查它登录的账号能否推送到每个仓库，然后重启 dsh-superagent。', en: 'A command name or absolute path, usually a gh wrapper signed in to the agent account through GH_CONFIG_DIR. The agent acts as the account it is signed in to, and the Executor calls it as gh. Saving checks that this account can push to each repository, then restarts dsh-superagent.' } },
     { key: 'repositories', type: 'rows', label: { zh: '监听的仓库', en: 'Repositories' },
-      hint: { zh: '每行一个仓库，写作 owner/name。这个来源接收列表里每个仓库的通知和讨论。列表有先后，第一个是默认仓库：没有写明仓库的消息用它。保存时检查智能体账号能否推送到每个仓库，然后重启 dsh-superagent。', en: 'One repository per row, written owner/name. This Source receives the notifications and discussion of every repository on the list. The list is ordered: the first is the default repository, used by messages that name none. Saving checks that the agent account can push to each repository, then restarts dsh-superagent.' },
-      columns: [{ key: 'repository', type: 'text', pattern: '[A-Za-z0-9_.\\-]+/[A-Za-z0-9_.\\-]+', label: { zh: '仓库', en: 'Repository' } }] },
+      hint: { zh: '每行一个仓库，写作 owner/name。这个来源接收列表里每个仓库的通知和讨论。列表有先后，第一个是默认仓库：没有写明仓库的消息用它。别名可以不填：用逗号分隔的简称，飞书消息里写这个简称就等于写了这个仓库，例如 TGR-Robotics/A2_HMI 填 hmi。保存时检查智能体账号能否推送到每个仓库，然后重启 dsh-superagent。', en: 'One repository per row, written owner/name. This Source receives the notifications and discussion of every repository on the list. The list is ordered: the first is the default repository, used by messages that name none. Aliases are optional: comma-separated short names that a Feishu message may use for the repository, for example hmi for TGR-Robotics/A2_HMI. Saving checks that the agent account can push to each repository, then restarts dsh-superagent.' },
+      columns: [{ key: 'repository', type: 'text', pattern: '[A-Za-z0-9_.\\-]+/[A-Za-z0-9_.\\-]+', label: { zh: '仓库', en: 'Repository' } },
+        { key: 'aliases', type: 'text', label: { zh: '别名', en: 'Aliases' }, optional: true }] },
     { key: 'pollSeconds', type: 'number', advanced: true, min: 60, max: 3600, label: { zh: '轮询间隔 / 秒', en: 'Polling interval / seconds' }, hint: { zh: 'GitHub 要求更长间隔时以 GitHub 为准。', en: 'A longer interval requested by GitHub wins.' } },
     { key: 'failuresBeforeError', type: 'number', advanced: true, min: 1, max: 20, label: { zh: '连续失败几次后报告异常', en: 'Failed polls before reporting an error' }, hint: { zh: '单次网络中断会在下一次轮询时自动重试，不必报告。', en: 'A single network interruption is retried on the next poll and need not be reported.' } },
     { key: 'observeIssues', type: 'switch', label: { zh: '接收仓库里的新 Issue', en: 'Receive new Issues in the repository' },
@@ -103,7 +106,7 @@ export const githubKind: SourceKind<GithubConfig> = {
   },
   environment: {
     variables: [
-      { key: 'DSH_SUPERAGENT_GITHUB_REPOSITORY', description: { zh: '这个工单工作的仓库，owner/name：从 GitHub 来的工单是它所在的仓库，消息里写了某个监听的仓库时是那个仓库，否则是默认仓库。智能体在这里开的 PR，分支最后一段是 DSH_SUPERAGENT_NAME 时（例如 agent/$DSH_SUPERAGENT_NAME）会关联到工单', en: 'The repository this ticket works in, as owner/name: the repository a ticket from GitHub came from, the watched repository its message names, or else the default repository. A PR the agent opens here from a branch whose last path segment is DSH_SUPERAGENT_NAME (for example agent/$DSH_SUPERAGENT_NAME) binds to the ticket' } },
+      { key: 'DSH_SUPERAGENT_GITHUB_REPOSITORY', description: { zh: '这个工单工作的仓库，owner/name：从 GitHub 来的工单是它所在的仓库，消息里写了某个监听的仓库或它的别名时是那个仓库，否则是默认仓库。智能体在这里开的 PR，分支最后一段是 DSH_SUPERAGENT_NAME 时（例如 agent/$DSH_SUPERAGENT_NAME）会关联到工单', en: 'The repository this ticket works in, as owner/name: the repository a ticket from GitHub came from, the watched repository its message names (or one of its aliases), or else the default repository. A PR the agent opens here from a branch whose last path segment is DSH_SUPERAGENT_NAME (for example agent/$DSH_SUPERAGENT_NAME) binds to the ticket' } },
       { key: 'DSH_SUPERAGENT_GITHUB_REPOSITORIES', description: { zh: '这个来源监听的全部仓库，owner/name，用逗号分隔；第一个是默认仓库', en: 'Every repository this Source watches, as owner/name separated by commas; the first is the default repository' } },
       { key: 'DSH_SUPERAGENT_GITHUB_ACCOUNT', description: { zh: '智能体的 GitHub 账号；gh 以它登录，除自动合并外的 GitHub 操作都用 gh，不用其他账号或凭据', en: 'The agent\'s GitHub account. gh is signed in to it; use gh for every GitHub operation except auto-merge, and never another account or credential' } },
       { key: 'DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL', description: { zh: '智能体账号的提交邮箱。这里的 git 没有身份：按提示词写明的作者提交，没有写明时用智能体账号和这个邮箱', en: 'Commit email of the agent\'s account. git has no identity here: commit as the author these instructions name, or as the agent\'s account with this email when they name none' } },

@@ -109,4 +109,8 @@ it('counts a change of the configured repositories as a setup change, but not th
   expect(setupChanged(legacy, github({ repository: '', repositories: [{ repository: 'acme/widgets' }] }))).toBe(false)
   expect(setupChanged(legacy, github({ repositories: [{ repository: 'acme/widgets' }, { repository: 'acme/gizmos' }] }))).toBe(true)
   expect(setupChanged(legacy, github({ repository: 'acme/widgets', cli: 'other-gh' }))).toBe(true)
+  // A change of the aliases is a setup change; the same aliases written with other separators are not.
+  const aliased = (aliases: string) => github({ repositories: [{ repository: 'acme/widgets', aliases }] })
+  expect(setupChanged(aliased('hmi,ros'), aliased('hmi, robot'))).toBe(true)
+  expect(setupChanged(aliased('hmi,ros'), aliased(' hmi  ros '))).toBe(false)
 })
